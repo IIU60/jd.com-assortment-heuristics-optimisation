@@ -9,13 +9,14 @@ from ..model.simulator import simulate
 
 def myopic_greedy(instance: Instance) -> Tuple[float, np.ndarray]:
     """
-    Myopic greedy baseline: allocate shipments based on current period demand.
+    Myopic greedy baseline: allocate shipments based on future period demand.
     
     For each period t:
-    - Look at today's FDC demand D[t, i, j]
-    - Compute required shipments to cover D[t, i, j] - current_fdc_inventory
+    - Look ahead by lead_time periods: look at demand D[t + lead_time, i, j]
+    - Compute required shipments to cover D[t + lead_time, i, j] - current_fdc_inventory
     - If RDC inventory insufficient, allocate proportional to demand
     - Respect outbound_capacity[t] and fdc_capacity[j]
+    - In last lead_time periods, falls back to current period demand
     
     Args:
         instance: Problem instance
@@ -46,8 +47,13 @@ def myopic_greedy(instance: Instance) -> Tuple[float, np.ndarray]:
         
         # For each product, allocate to FDCs based on demand
         for i in range(N):
-            # Compute demand shortfall at each FDC
-            shortfall = np.maximum(0, instance.demand_fdc[t, i, :] - inventory_fdc[i, :])
+            # Look ahead by lead_time periods
+            target_period = t + instance.lead_time
+            if target_period < instance.T:
+                shortfall = np.maximum(0, instance.demand_fdc[target_period, i, :] - inventory_fdc[i, :])
+            else:
+                # Last lead_time periods: can't see full future, use current period as fallback
+                shortfall = np.maximum(0, instance.demand_fdc[t, i, :] - inventory_fdc[i, :])
             total_shortfall = np.sum(shortfall)
             
             if total_shortfall <= 0:

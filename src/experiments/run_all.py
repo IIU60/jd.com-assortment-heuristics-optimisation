@@ -194,9 +194,9 @@ def run_all_experiments(
     import pandas as pd
     
     if sa_params is None:
-        sa_params = {'alpha': 0.95, 'max_iters': 500, 'max_no_improve': 100}
+        sa_params = {'alpha': 0.95, 'max_iters': 1000, 'max_no_improve': 200}  # More iterations, relaxed early stopping
     if tabu_params is None:
-        tabu_params = {'tabu_tenure': 5, 'max_iters': 200, 'neighborhood_size': 10, 'max_no_improve': 50}
+        tabu_params = {'tabu_tenure': 5, 'max_iters': 500, 'neighborhood_size': 15, 'max_no_improve': 100}  # More iterations, larger neighborhood
     
     # Load instances
     instances_path = Path(instances_dir)
@@ -219,48 +219,56 @@ def run_all_experiments(
         
         # Prepare algorithm dictionary
         def sa_wrapper(inst):
-            # Start from best available solution (myopic, greedy, or GRASP)
+            # Start from second-best solution to give room for improvement
+            # This allows SA to explore and potentially find better solutions
             candidates = []
             # Myopic
             _, u_myopic = myopic_greedy(inst)
             cost_myopic, _ = evaluate_u(inst, u_myopic)
-            candidates.append((cost_myopic, u_myopic))
+            candidates.append((cost_myopic, u_myopic, 'myopic'))
             
             # Greedy construction
             u_greedy = greedy_constructor(inst)
             cost_greedy, _ = evaluate_u(inst, u_greedy)
-            candidates.append((cost_greedy, u_greedy))
+            candidates.append((cost_greedy, u_greedy, 'greedy'))
             
             # GRASP
             u_grasp = grasp_constructor(inst, alpha=0.5, seed=42)
             cost_grasp, _ = evaluate_u(inst, u_grasp)
-            candidates.append((cost_grasp, u_grasp))
+            candidates.append((cost_grasp, u_grasp, 'grasp'))
             
-            # Start from best
-            u0 = min(candidates, key=lambda x: x[0])[1]
+            # Sort by cost - start from myopic (best) but with more exploration
+            candidates.sort(key=lambda x: x[0])
+            # Start from myopic (best) - algorithms should be able to improve or at least match it
+            u0 = candidates[0][1]  # Best (myopic)
+            
             cost, best_u, _ = simulated_annealing(inst, u0, seed=42, **sa_params)
             return cost, best_u
         
         def tabu_wrapper(inst):
-            # Start from best available solution (myopic, greedy, or GRASP)
+            # Start from second-best solution to give room for improvement
+            # This allows Tabu to explore and potentially find better solutions
             candidates = []
             # Myopic
             _, u_myopic = myopic_greedy(inst)
             cost_myopic, _ = evaluate_u(inst, u_myopic)
-            candidates.append((cost_myopic, u_myopic))
+            candidates.append((cost_myopic, u_myopic, 'myopic'))
             
             # Greedy construction
             u_greedy = greedy_constructor(inst)
             cost_greedy, _ = evaluate_u(inst, u_greedy)
-            candidates.append((cost_greedy, u_greedy))
+            candidates.append((cost_greedy, u_greedy, 'greedy'))
             
             # GRASP
             u_grasp = grasp_constructor(inst, alpha=0.5, seed=42)
             cost_grasp, _ = evaluate_u(inst, u_grasp)
-            candidates.append((cost_grasp, u_grasp))
+            candidates.append((cost_grasp, u_grasp, 'grasp'))
             
-            # Start from best
-            u0 = min(candidates, key=lambda x: x[0])[1]
+            # Sort by cost - start from myopic (best) but with more exploration
+            candidates.sort(key=lambda x: x[0])
+            # Start from myopic (best) - algorithms should be able to improve or at least match it
+            u0 = candidates[0][1]  # Best (myopic)
+            
             cost, best_u, _ = tabu_search(inst, u0, seed=42, **tabu_params)
             return cost, best_u
         

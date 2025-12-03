@@ -260,7 +260,12 @@ def evaluate_u_incremental(
         # 3) FDC local fulfillment
         for i in range(N):
             for j in range(J):
-                avail_fdc = inventory_fdc[t, i, j] + actual_shipments[t, i, j]
+                # Shipments ordered in period (t - lead_time) arrive in period t
+                if t >= instance.lead_time:
+                    arrivals = actual_shipments[t - instance.lead_time, i, j]
+                else:
+                    arrivals = 0.0
+                avail_fdc = inventory_fdc[t, i, j] + arrivals
                 demand = instance.demand_fdc[t, i, j]
                 
                 fulfilled_local = min(avail_fdc, demand)

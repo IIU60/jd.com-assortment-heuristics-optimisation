@@ -17,6 +17,9 @@ def simulate(instance: Instance,
     at the start of period t), this function simulates inventory flows and computes
     total cost.
     
+    Shipments ordered in period t arrive at FDCs in period t + lead_time.
+    If lead_time = 1, shipments ordered in period t arrive in period t+1.
+    
     The simulator enforces constraints by clipping shipments:
     - RDC inventory availability
     - FDC capacity limits
@@ -102,7 +105,12 @@ def simulate(instance: Instance,
         for i in range(N):
             for j in range(J):
                 # Available FDC inventory (after shipments arrive)
-                avail_fdc = inventory_fdc[t, i, j] + actual_shipments[t, i, j]
+                # Shipments ordered in period (t - lead_time) arrive in period t
+                if t >= instance.lead_time:
+                    arrivals = actual_shipments[t - instance.lead_time, i, j]
+                else:
+                    arrivals = 0.0  # No shipments before period 0
+                avail_fdc = inventory_fdc[t, i, j] + arrivals
                 demand = instance.demand_fdc[t, i, j]
                 
                 # Fulfill from local inventory

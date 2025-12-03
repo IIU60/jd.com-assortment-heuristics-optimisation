@@ -49,6 +49,10 @@ class Instance:
         
         lost_sale_cost: Penalty per unit of lost demand
             Applied to both FDC and RDC lost sales
+        
+        lead_time: Transfer lead time (number of periods)
+            Shipments ordered in period t arrive in period t + lead_time
+            Default is 1 day
     """
     num_products: int
     num_fdcs: int
@@ -73,6 +77,7 @@ class Instance:
     transfer_cost: np.ndarray  # shape (N, J)
     rdc_fulfillment_cost: float
     lost_sale_cost: float
+    lead_time: int = 1  # Transfer lead time (default 1 day)
     
     def validate(self) -> None:
         """
@@ -112,4 +117,8 @@ class Instance:
         
         if self.fdc_capacity is not None:
             assert np.all(self.fdc_capacity >= 0), "fdc_capacity must be non-negative"
+        
+        # Check lead_time
+        assert self.lead_time >= 0, "lead_time must be non-negative"
+        assert self.lead_time < self.T, f"lead_time ({self.lead_time}) must be < T ({self.T})"
 

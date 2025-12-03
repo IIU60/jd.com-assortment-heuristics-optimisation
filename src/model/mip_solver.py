@@ -129,9 +129,17 @@ def solve_exact(instance: Instance, time_limit: Optional[float] = 60.0) -> Tuple
     for t in range(T):
         for i in range(N):
             for j in range(J):
+                # Shipments ordered in period (t - lead_time) arrive in period t
+                if t >= instance.lead_time:
+                    # Shipments that arrive in period t were ordered in t - lead_time
+                    arrivals = u[t - instance.lead_time, i, j]
+                else:
+                    # No shipments arrive in periods before lead_time
+                    arrivals = 0.0
+                
                 prob += (
                     I_fdc[t+1, i, j] ==
-                    I_fdc[t, i, j] + u[t, i, j] - x[t, i, j]
+                    I_fdc[t, i, j] + arrivals - x[t, i, j]
                 )
     
     # FDC demand satisfaction

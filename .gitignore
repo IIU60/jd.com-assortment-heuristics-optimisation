@@ -141,6 +141,7 @@ results/
 # Generated data files (but allow exceptions if needed)
 instances/*
 experiments/*
+old_experiments/*
 
 # Plot files in results (handled by results/ above, but explicit for clarity)
 *.png
