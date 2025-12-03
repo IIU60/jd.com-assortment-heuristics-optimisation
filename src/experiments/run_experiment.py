@@ -1,85 +1,53 @@
 """CLI experiment runner with organized directory structure."""
 
 import argparse
-import shutil
 from pathlib import Path
 from typing import Dict, Any, Optional
 import time
+from datetime import datetime
 
 from .run_all import run_all_experiments
 
 
 def setup_experiment(
-    instances_source: str,
     experiment_name: Optional[str] = None,
-    copy_instances: bool = True
 ) -> tuple[Path, Path]:
     """
-    Set up experiment directories.
+    Set up a *new* experiment directory under ``experiments/``.
+    
+    This follows the new standard layout:
+    
+        experiments/<experiment_name>/
+            instances/
+            results/
+    
+    The function ensures that the base experiment directory does not already
+    exist to avoid accidentally overwriting previous runs. If no explicit
+    ``experiment_name`` is provided, a timestamped name is generated.
     
     Args:
-        instances_source: Path to source instances (directory, glob pattern, or single file)
-        experiment_name: Name for experiment (default: based on source or timestamp)
-        copy_instances: If True, copy instances to experiment directory
+        experiment_name: Optional explicit experiment name. If omitted, a
+            descriptive timestamp-based name is used.
     
     Returns:
         Tuple of (instances_dir, output_dir)
     """
-    import glob
-    
-    # Find instance files
-    source_path = Path(instances_source)
-    
-    if source_path.is_file() and source_path.suffix == '.json':
-        # Single file
-        instance_files = [str(source_path)]
-        base_name = source_path.stem
-    elif source_path.is_dir():
-        # Directory - get all JSON files
-        pattern = str(source_path / '*.json')
-        instance_files = glob.glob(pattern)
-        base_name = source_path.name
-    elif '*' in instances_source:
-        # Glob pattern
-        instance_files = glob.glob(instances_source)
-        # Extract meaningful name from pattern
-        base_name = instances_source.replace('*', '').replace('/', '_').replace('\\', '_').strip('_')
-        if not base_name or base_name == '_':
-            base_name = 'filtered'
-    else:
-        raise ValueError(f"Invalid instances source: {instances_source}")
-    
-    if not instance_files:
-        raise ValueError(f"No instance files found matching: {instances_source}")
-    
-    # Determine experiment name
     if experiment_name is None:
-        experiment_name = base_name
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        experiment_name = f"experiment_{timestamp}"
     
-    # Create experiment directories
     base_dir = Path('experiments') / experiment_name
+    if base_dir.exists():
+        raise FileExistsError(
+            f"Experiment directory '{base_dir}' already exists. "
+            f"Please choose a different experiment name."
+        )
+    
     instances_dir = base_dir / 'instances'
     output_dir = base_dir / 'results'
     
-    instances_dir.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Copy instances if requested
-    if copy_instances:
-        for src_file in instance_files:
-            dst_file = instances_dir / Path(src_file).name
-            shutil.copy2(src_file, dst_file)
-        print(f"Copied {len(instance_files)} instances to {instances_dir}")
-    else:
-        # Use source directory directly (only works for directory input)
-        if source_path.is_dir():
-            instances_dir = source_path
-        else:
-            # For glob patterns, we need to copy
-            for src_file in instance_files:
-                dst_file = instances_dir / Path(src_file).name
-                shutil.copy2(src_file, dst_file)
-            print(f"Copied {len(instance_files)} instances to {instances_dir}")
+    instances_dir.mkdir(parents=True, exist_ok=False)
+    output_dir.mkdir(parents=True, exist_ok=False)
     
     return instances_dir, output_dir
 
@@ -103,26 +71,6 @@ Examples:
     --tabu-tenure 8 --tabu-iters 300 --tabu-nh-size 50 \\
     --mip-time 300
         """
-    )
-    
-    # Instance selection
-    parser.add_argument(
-        'instances',
-        type=str,
-        help='Path to instances: directory, glob pattern (e.g., "instances/large_*.json"), or single file'
-    )
-    
-    parser.add_argument(
-        '--name',
-        type=str,
-        default=None,
-        help='Experiment name (default: based on source or timestamp)'
-    )
-    
-    parser.add_argument(
-        '--no-copy',
-        action='store_true',
-        help='Do not copy instances (use source directory directly)'
     )
     
     # SA parameters
@@ -160,6 +108,12 @@ Examples:
         default=0.1,
         help='SA probability of applying a large destroy-repair move (default: 0.1)'
     )
+    parser.add_argument(
+        '--sa-time-limit',
+        type=float,
+        default=None,
+        help='SA time limit in seconds per instance (default: None, uses size-based heuristic)'
+    )
     
     # Tabu parameters
     parser.add_argument(
@@ -196,6 +150,12 @@ Examples:
         default=0.1,
         help='Tabu probability of applying a large destroy-repair move (default: 0.1)'
     )
+    parser.add_argument(
+        '--tabu-time-limit',
+        type=float,
+        default=None,
+        help='Tabu time limit in seconds per instance (default: None, uses size-based heuristic)'
+    )
     
     # MIP parameters
     parser.add_argument(
@@ -216,14 +176,15 @@ Examples:
     
     # Set up experiment directories
     print(f"\n{'='*70}")
-    print(f"Setting up experiment: {args.name or 'unnamed'}")
+    print(f"Setting up experiment directory")
     print(f"{'='*70}")
     
-    instances_dir, output_dir = setup_experiment(
-        args.instances,
-        experiment_name=args.name,
-        copy_instances=not args.no_copy
-    )
+    # The new standard is that experiment-specific scripts (e.g., run_small,
+    # run_medium, run_large) are responsible for generating instances inside
+    # the experiment directory. This CLI now only creates an empty experiment
+    # folder and reports its locations so that the user or other tooling can
+    # populate instances as needed.
+    instances_dir, output_dir = setup_experiment(experiment_name=None)
     
     print(f"Instances directory: {instances_dir}")
     print(f"Results directory: {output_dir}")
@@ -233,24 +194,28 @@ Examples:
         'alpha': args.sa_alpha,
         'max_iters': args.sa_iters,
         'max_no_improve': 100,
-        'num_starts': args.sa_num_starts,
         'large_move_prob': args.sa_large_move_prob,
     }
     if args.sa_t0 is not None:
         sa_params['T0'] = args.sa_t0
+    if args.sa_time_limit is not None:
+        sa_params['time_limit'] = args.sa_time_limit
     
     tabu_params = {
         'tabu_tenure': args.tabu_tenure,
         'max_iters': args.tabu_iters,
         'neighborhood_size': args.tabu_nh_size,
-        'num_starts': args.tabu_num_starts,
         'large_move_prob': args.tabu_large_move_prob,
     }
+    if args.tabu_time_limit is not None:
+        tabu_params['time_limit'] = args.tabu_time_limit
     
     print(f"\nAlgorithm parameters:")
     sa_t0_str = f"T0={sa_params.get('T0', 'adaptive')}"
-    print(f"  SA: {sa_t0_str}, alpha={sa_params['alpha']}, iters={sa_params['max_iters']}")
-    print(f"  Tabu: tenure={tabu_params['tabu_tenure']}, iters={tabu_params['max_iters']}, nh_size={tabu_params['neighborhood_size']}")
+    sa_time_str = sa_params.get('time_limit', 'auto')
+    tabu_time_str = tabu_params.get('time_limit', 'auto')
+    print(f"  SA: {sa_t0_str}, alpha={sa_params['alpha']}, iters={sa_params['max_iters']}, time_limit={sa_time_str}s")
+    print(f"  Tabu: tenure={tabu_params['tabu_tenure']}, iters={tabu_params['max_iters']}, nh_size={tabu_params['neighborhood_size']}, time_limit={tabu_time_str}s")
     print(f"  MIP: max_time={args.mip_time}s")
     
     # Run experiments

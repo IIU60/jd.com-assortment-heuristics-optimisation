@@ -1,112 +1,64 @@
 # Experiment Runner Guide
 
-## New CLI Experiment Runner
+## Experiment Workflow
 
-The `run_experiment.py` script provides a flexible way to run experiments with organized directory structure.
+The new workflow is built around *size-specific* runners that each:
 
-## Features
+- Create a fresh experiment directory under `experiments/{name}/`
+- Create `instances/` and `results/` subfolders
+- Generate synthetic instances with the desired size
+- Run all algorithms via `run_all_experiments`
 
-- **Organized directories**: Creates `experiments/{name}/instances/` and `experiments/{name}/results/`
-- **Instance filtering**: Use glob patterns to select specific instances
-- **Automatic copying**: Copies selected instances to experiment directory
-- **Full parameter control**: All algorithm parameters via CLI
-- **Clean organization**: Each experiment is self-contained
-
-## Basic Usage
-
-### Run on specific instances (glob pattern)
+## Size-Specific Runners
 
 ```bash
-# Run only on large instances
-python -m src.experiments.run_experiment "instances/large_*.json" --name large_test
+# Small: 5 FDC, 20 SKU
+python -m src.experiments.run_small
 
-# Run only on medium test instances
-python -m src.experiments.run_experiment "instances/medium_test_*.json" --name medium_test
+# Medium: 20 FDC, 100 SKU
+python -m src.experiments.run_medium
+
+# Large: 80 FDC, 320 SKU
+python -m src.experiments.run_large
+
+# Massive: 100 FDC, 1000 SKU
+python -m src.experiments.run_massive
 ```
 
-### Run on all instances in a directory
-
-```bash
-python -m src.experiments.run_experiment instances/ --name full_run
-```
-
-### Run on a single instance
-
-```bash
-python -m src.experiments.run_experiment instances/large_00.json --name single_test
-```
-
-## Parameter Customization
-
-### Simulated Annealing
-
-```bash
-python -m src.experiments.run_experiment instances/ \
-  --sa-t0 200000 \
-  --sa-alpha 0.96 \
-  --sa-iters 500
-```
-
-### Tabu Search
-
-```bash
-python -m src.experiments.run_experiment instances/ \
-  --tabu-tenure 8 \
-  --tabu-iters 300 \
-  --tabu-nh-size 50
-```
-
-### MIP Solver
-
-```bash
-python -m src.experiments.run_experiment instances/ \
-  --mip-time 300  # 5 minutes max
-```
-
-## Complete Example: Large Instance Run
-
-```bash
-python -m src.experiments.run_experiment "instances/large_*.json" \
-  --name large_full \
-  --sa-t0 200000 \
-  --sa-alpha 0.96 \
-  --sa-iters 500 \
-  --tabu-tenure 8 \
-  --tabu-iters 300 \
-  --tabu-nh-size 50 \
-  --mip-time 300
-```
-
-## Output Structure
+Each script creates a directory such as:
 
 ```
 experiments/
-└── {experiment_name}/
-    ├── instances/          # Copied instance files
-    │   ├── large_00.json
-    │   ├── large_01.json
-    │   └── ...
-    └── results/            # All results
+└── small_5fdc_20sku_T14_20250101-120000/
+    ├── instances/
+    │   └── small_00.json
+    └── results/
         ├── all_results.csv
         ├── cost_comparison.png
         ├── service_level.png
         ├── runtime_comparison.png
         ├── cost_by_type.png
-        └── {instance}_results.json  # Per-instance results
+        └── {instance}_results.json
 ```
 
-## Default Parameters
+## Baseline Selection
 
-- **SA**: T0=100000, alpha=0.95, iters=500
-- **Tabu**: tenure=5, iters=200, nh_size=30
-- **MIP**: max_time=120s
+All runners accept a `--baseline` flag (repeatable) to control which baselines
+are evaluated:
 
-## Tips
+```bash
+# Run only random baseline (default)
+python -m src.experiments.run_medium
 
-1. **Large instances**: MIP will likely timeout - that's expected. Focus on heuristics.
-2. **Quick tests**: Use `--sa-iters 50 --tabu-iters 50` for faster runs
-3. **No copying**: Use `--no-copy` to use source directory directly (faster but less organized)
-4. **Experiment names**: Use descriptive names like `large_200x50` or `medium_20x5`
+# Run myopic + random
+python -m src.experiments.run_medium --baseline myopic --baseline random
+
+# Run all three baselines
+python -m src.experiments.run_large --baseline myopic --baseline static_prop --baseline random
+```
+
+If no `--baseline` flags are given, only the **random** baseline is run
+(`myopic` and `static_prop` are disabled by default).
 
 ## Viewing Results
 

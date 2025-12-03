@@ -3,7 +3,7 @@
 import time
 import json
 from pathlib import Path
-from typing import Dict, Any, Callable, Tuple, Optional
+from typing import Dict, Any, Callable, Tuple, Optional, List
 import numpy as np
 
 from ..model.instance import Instance
@@ -167,21 +167,31 @@ def load_results(filepath: str) -> Dict[str, Any]:
 
 
 def run_all_experiments(
-    instances_dir: str = 'instances',
-    output_dir: str = 'results',
+    instances_dir: str,
+    output_dir: str,
     sa_params: Dict[str, Any] = None,
     tabu_params: Dict[str, Any] = None,
-    mip_max_time: float = 120.0
+    mip_max_time: float = 120.0,
+    baseline_names: Optional[List[str]] = None,
 ) -> None:
     """
     Run all algorithms on all instances and save results.
     
+    This function assumes the caller has already created a dedicated
+    experiment directory under ``experiments/`` with the usual layout::
+    
+        experiments/<experiment_name>/
+            instances/
+            results/
+    
     Args:
-        instances_dir: Directory containing instance files
-        output_dir: Directory to save results
+        instances_dir: Directory containing instance files for *this* experiment
+        output_dir: Directory to save results for *this* experiment
         sa_params: SA parameters (T0, alpha, max_iters)
         tabu_params: Tabu Search parameters (tabu_tenure, max_iters, neighborhood_size)
         mip_max_time: Maximum time limit for MIP solver in seconds (default: 120)
+        baseline_names: Optional list of baseline algorithm names to run from
+            {'myopic', 'static_prop', 'random'}. If None, defaults to ['random'].
     """
     from pathlib import Path
     from ..model.instance_generator import load_instance
@@ -193,27 +203,28 @@ def run_all_experiments(
     from .plots import create_all_plots
     import pandas as pd
     
+    # Baselines to include (default: only random, to keep runtime modest)
+    if baseline_names is None:
+        baseline_names = ['random']
+    baseline_set = set(baseline_names)
+
     if sa_params is None:
         sa_params = {
             'alpha': 0.95,
-            'max_iters': 1000,
+            'max_iters': 500,
             'max_no_improve': 200,
-            'num_starts': 3,
             'large_move_prob': 0.1,
-            # start_mode: 'pool' (default, diversified pool from constructions)
-            #          or 'random' (pure random_feasible_u starts)
-        }  # Multi-start with occasional large moves
+            # time_limit: optional override (seconds) per instance for SA
+        }  # Single-start SA with occasional large moves
     if tabu_params is None:
         tabu_params = {
             'tabu_tenure': 5,
-            'max_iters': 500,
-            'neighborhood_size': 15,
+            'max_iters': 200,
+            'neighborhood_size': 8,
             'max_no_improve': 100,
-            'num_starts': 2,
             'large_move_prob': 0.1,
-            # start_mode: 'pool' (default, diversified pool from constructions)
-            #          or 'random' (pure random_feasible_u starts)
-        }  # Multi-start Tabu with occasional large moves
+            # time_limit: optional override (seconds) per instance for Tabu
+        }  # Single-start Tabu with occasional large moves
     
     # Load instances
     instances_path = Path(instances_dir)
@@ -234,138 +245,52 @@ def run_all_experiments(
         instance = load_instance(str(instance_file))
         instance_type = 'small' if instance.num_products <= 10 else 'medium'
         
-        # Multi-start parameters for heuristics
-        sa_num_starts = int(sa_params.get('num_starts', 3))
+        # Time budgets for heuristics (seconds), scaled by instance size
+        base_scale = instance.num_products * instance.num_fdcs * instance.T
+        # Keep budgets modest to ensure heuristics are much cheaper than MIP
+        sa_time_limit = float(sa_params.get(
+            'time_limit',
+            min(5.0, 0.002 * base_scale + 1.0),
+        ))
+        tabu_time_limit = float(tabu_params.get(
+            'time_limit',
+            min(5.0, 0.002 * base_scale + 1.5),
+        ))
         sa_large_move_prob = float(sa_params.get('large_move_prob', 0.0))
-        sa_base_max_iters = int(sa_params.get('max_iters', 1000))
-        sa_start_mode = str(sa_params.get('start_mode', 'pool'))
-        # Split total iterations across starts (but keep a sensible minimum)
-        sa_iters_per_start = max(50, sa_base_max_iters // max(1, sa_num_starts))
-        
-        tabu_num_starts = int(tabu_params.get('num_starts', 2))
         tabu_large_move_prob = float(tabu_params.get('large_move_prob', 0.0))
-        tabu_base_max_iters = int(tabu_params.get('max_iters', 500))
-        tabu_start_mode = str(tabu_params.get('start_mode', 'pool'))
-        tabu_iters_per_start = max(50, tabu_base_max_iters // max(1, tabu_num_starts))
         
-        # Prepare algorithm dictionary
+        # Prepare algorithm dictionary (single-start heuristics)
         def sa_wrapper(inst):
-            best_cost = np.inf
-            best_u = None
-
-            if sa_start_mode == 'random':
-                # Pure random-feasible starts (no myopic/greedy constructions)
-                for s in range(sa_num_starts):
-                    u0 = random_feasible_u(inst, seed=42 + s)
-                    cost, u_sa, _ = simulated_annealing(
-                        inst,
-                        u0,
-                        T0=sa_params.get('T0', None),
-                        alpha=sa_params.get('alpha', 0.95),
-                        max_iters=sa_iters_per_start,
-                        max_no_improve=sa_params.get('max_no_improve', 100),
-                        seed=42 + s,
-                        large_move_prob=sa_large_move_prob,
-                    )
-                    if cost < best_cost:
-                        best_cost = cost
-                        best_u = u_sa
-            elif sa_start_mode == 'grasp':
-                # Start exclusively from GRASP-constructed solutions
-                for s in range(sa_num_starts):
-                    u0 = grasp_constructor(inst, alpha=0.5, seed=42 + s)
-                    cost, u_sa, _ = simulated_annealing(
-                        inst,
-                        u0,
-                        T0=sa_params.get('T0', None),
-                        alpha=sa_params.get('alpha', 0.95),
-                        max_iters=sa_iters_per_start,
-                        max_no_improve=sa_params.get('max_no_improve', 100),
-                        seed=42 + s,
-                        large_move_prob=sa_large_move_prob,
-                    )
-                    if cost < best_cost:
-                        best_cost = cost
-                        best_u = u_sa
-            else:
-                # Default: diversified pool from myopic/greedy/GRASP constructions
-                starting_pool = build_starting_pool(inst, max_starts=sa_num_starts, seed=42)
-                for start in starting_pool:
-                    u0 = start['u']
-                    cost, u_sa, _ = simulated_annealing(
-                        inst,
-                        u0,
-                        T0=sa_params.get('T0', None),
-                        alpha=sa_params.get('alpha', 0.95),
-                        max_iters=sa_iters_per_start,
-                        max_no_improve=sa_params.get('max_no_improve', 100),
-                        seed=42,
-                        large_move_prob=sa_large_move_prob,
-                    )
-                    if cost < best_cost:
-                        best_cost = cost
-                        best_u = u_sa
-            
-            return best_cost, best_u
+            # Single strong construction as start (GRASP)
+            u0 = grasp_constructor(inst, alpha=0.5, seed=42)
+            cost, u_sa, _ = simulated_annealing(
+                inst,
+                u0,
+                T0=sa_params.get('T0', None),
+                alpha=sa_params.get('alpha', 0.95),
+                max_iters=sa_params.get('max_iters', 500),
+                max_no_improve=sa_params.get('max_no_improve', 200),
+                seed=42,
+                large_move_prob=sa_large_move_prob,
+                time_limit=sa_time_limit,
+            )
+            return cost, u_sa
         
         def tabu_wrapper(inst):
-            best_cost = np.inf
-            best_u = None
-
-            if tabu_start_mode == 'random':
-                # Pure random-feasible starts
-                for s in range(tabu_num_starts):
-                    u0 = random_feasible_u(inst, seed=43 + s)
-                    cost, u_tabu, _ = tabu_search(
-                        inst,
-                        u0,
-                        tabu_tenure=tabu_params.get('tabu_tenure', 5),
-                        max_iters=tabu_iters_per_start,
-                        neighborhood_size=tabu_params.get('neighborhood_size', 15),
-                        max_no_improve=tabu_params.get('max_no_improve', 100),
-                        seed=43 + s,
-                        large_move_prob=tabu_large_move_prob,
-                    )
-                    if cost < best_cost:
-                        best_cost = cost
-                        best_u = u_tabu
-            elif tabu_start_mode == 'grasp':
-                # Start exclusively from GRASP-constructed solutions
-                for s in range(tabu_num_starts):
-                    u0 = grasp_constructor(inst, alpha=0.5, seed=43 + s)
-                    cost, u_tabu, _ = tabu_search(
-                        inst,
-                        u0,
-                        tabu_tenure=tabu_params.get('tabu_tenure', 5),
-                        max_iters=tabu_iters_per_start,
-                        neighborhood_size=tabu_params.get('neighborhood_size', 15),
-                        max_no_improve=tabu_params.get('max_no_improve', 100),
-                        seed=43 + s,
-                        large_move_prob=tabu_large_move_prob,
-                    )
-                    if cost < best_cost:
-                        best_cost = cost
-                        best_u = u_tabu
-            else:
-                # Default: diversified pool from myopic/greedy/GRASP constructions
-                starting_pool = build_starting_pool(inst, max_starts=tabu_num_starts, seed=43)
-                for start in starting_pool:
-                    u0 = start['u']
-                    cost, u_tabu, _ = tabu_search(
-                        inst,
-                        u0,
-                        tabu_tenure=tabu_params.get('tabu_tenure', 5),
-                        max_iters=tabu_iters_per_start,
-                        neighborhood_size=tabu_params.get('neighborhood_size', 15),
-                        max_no_improve=tabu_params.get('max_no_improve', 100),
-                        seed=43,
-                        large_move_prob=tabu_large_move_prob,
-                    )
-                    if cost < best_cost:
-                        best_cost = cost
-                        best_u = u_tabu
-            
-            return best_cost, best_u
+            # Single strong construction as start (GRASP)
+            u0 = grasp_constructor(inst, alpha=0.5, seed=43)
+            cost, u_tabu, _ = tabu_search(
+                inst,
+                u0,
+                tabu_tenure=tabu_params.get('tabu_tenure', 5),
+                max_iters=tabu_params.get('max_iters', 200),
+                neighborhood_size=tabu_params.get('neighborhood_size', 8),
+                max_no_improve=tabu_params.get('max_no_improve', 100),
+                seed=43,
+                large_move_prob=tabu_large_move_prob,
+                time_limit=tabu_time_limit,
+            )
+            return cost, u_tabu
         
         def greedy_wrapper(inst):
             u = greedy_constructor(inst)
@@ -390,16 +315,24 @@ def run_all_experiments(
                 return None, None
             return optimal_cost, optimal_u
         
-        alg_dict = {
-            'myopic': myopic_greedy,
-            'static_prop': static_proportional,
-            'random': lambda inst: random_feasible(inst, seed=42),
+        alg_dict: Dict[str, Callable[[Instance], Tuple[float, np.ndarray]]] = {}
+
+        # Select baselines according to requested metrics
+        if 'myopic' in baseline_set:
+            alg_dict['myopic'] = myopic_greedy
+        if 'static_prop' in baseline_set:
+            alg_dict['static_prop'] = static_proportional
+        if 'random' in baseline_set:
+            alg_dict['random'] = lambda inst: random_feasible(inst, seed=42)
+
+        # Heuristic constructors and MIP are always included
+        alg_dict.update({
             'greedy': greedy_wrapper,
             'grasp': grasp_wrapper,
             'sa': sa_wrapper,
             'tabu': tabu_wrapper,
-            'mip': mip_wrapper
-        }
+            'mip': mip_wrapper,
+        })
         
         # Run all algorithms
         results = run_all_algorithms_on_instance(instance, alg_dict, seed=42)

@@ -21,6 +21,9 @@ python test_basic.py
 ### 4. Run Full Experiments
 ```bash
 python -m src.experiments.run_small
+python -m src.experiments.run_medium
+python -m src.experiments.run_large
+python -m src.experiments.run_massive  # 100 FDC, 1000 SKU stress test
 ```
 
 ---
