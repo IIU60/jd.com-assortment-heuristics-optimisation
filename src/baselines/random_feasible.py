@@ -79,14 +79,14 @@ def random_feasible(instance: Instance, seed: int = 42) -> Tuple[float, np.ndarr
                 # Requested amount
                 request = proportions[j] * total_to_allocate
                 
-                # FDC capacity constraint
+                # FDC capacity constraint (ensure non-negative slack)
                 if instance.fdc_capacity is not None:
-                    cap_left_fdc = instance.fdc_capacity[j] - fdc_total[j]
+                    cap_left_fdc = max(0.0, instance.fdc_capacity[j] - fdc_total[j])
                 else:
                     cap_left_fdc = np.inf
                 
-                # Clip to feasible
-                feasible = min(request, avail_rdc, cap_left_fdc, remaining_outbound)
+                # Clip to feasible and enforce non-negativity
+                feasible = max(0.0, min(request, avail_rdc, cap_left_fdc, remaining_outbound))
                 
                 shipments[t, i, j] = feasible
                 inventory_rdc[i] -= feasible
@@ -96,6 +96,8 @@ def random_feasible(instance: Instance, seed: int = 42) -> Tuple[float, np.ndarr
                 if remaining_outbound <= 0:
                     break
     
+    # Defensive check (can be relaxed later if desired)
+    assert np.all(shipments >= 0), "random_feasible generated negative shipments"
     # Evaluate the plan
     result = simulate(instance, shipments, check_feasibility=False)
     return result.total_cost, shipments

@@ -245,6 +245,7 @@ def run_all_experiments(
         tabu_num_starts = int(tabu_params.get('num_starts', 2))
         tabu_large_move_prob = float(tabu_params.get('large_move_prob', 0.0))
         tabu_base_max_iters = int(tabu_params.get('max_iters', 500))
+        tabu_start_mode = str(tabu_params.get('start_mode', 'pool'))
         tabu_iters_per_start = max(50, tabu_base_max_iters // max(1, tabu_num_starts))
         
         # Prepare algorithm dictionary
@@ -256,6 +257,23 @@ def run_all_experiments(
                 # Pure random-feasible starts (no myopic/greedy constructions)
                 for s in range(sa_num_starts):
                     u0 = random_feasible_u(inst, seed=42 + s)
+                    cost, u_sa, _ = simulated_annealing(
+                        inst,
+                        u0,
+                        T0=sa_params.get('T0', None),
+                        alpha=sa_params.get('alpha', 0.95),
+                        max_iters=sa_iters_per_start,
+                        max_no_improve=sa_params.get('max_no_improve', 100),
+                        seed=42 + s,
+                        large_move_prob=sa_large_move_prob,
+                    )
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_u = u_sa
+            elif sa_start_mode == 'grasp':
+                # Start exclusively from GRASP-constructed solutions
+                for s in range(sa_num_starts):
+                    u0 = grasp_constructor(inst, alpha=0.5, seed=42 + s)
                     cost, u_sa, _ = simulated_annealing(
                         inst,
                         u0,
@@ -294,10 +312,27 @@ def run_all_experiments(
             best_cost = np.inf
             best_u = None
 
-            if str(tabu_params.get('start_mode', 'pool')) == 'random':
+            if tabu_start_mode == 'random':
                 # Pure random-feasible starts
                 for s in range(tabu_num_starts):
                     u0 = random_feasible_u(inst, seed=43 + s)
+                    cost, u_tabu, _ = tabu_search(
+                        inst,
+                        u0,
+                        tabu_tenure=tabu_params.get('tabu_tenure', 5),
+                        max_iters=tabu_iters_per_start,
+                        neighborhood_size=tabu_params.get('neighborhood_size', 15),
+                        max_no_improve=tabu_params.get('max_no_improve', 100),
+                        seed=43 + s,
+                        large_move_prob=tabu_large_move_prob,
+                    )
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_u = u_tabu
+            elif tabu_start_mode == 'grasp':
+                # Start exclusively from GRASP-constructed solutions
+                for s in range(tabu_num_starts):
+                    u0 = grasp_constructor(inst, alpha=0.5, seed=43 + s)
                     cost, u_tabu, _ = tabu_search(
                         inst,
                         u0,

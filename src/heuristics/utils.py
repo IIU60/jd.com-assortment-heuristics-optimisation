@@ -81,13 +81,14 @@ def random_feasible_u(instance: Instance, seed: int = None) -> np.ndarray:
                 
                 request = proportions[j] * total_allocate
                 
-                # FDC capacity
+                # FDC capacity (ensure non-negative slack)
                 if instance.fdc_capacity is not None:
-                    cap_fdc = instance.fdc_capacity[j] - fdc_total[j]
+                    cap_fdc = max(0.0, instance.fdc_capacity[j] - fdc_total[j])
                 else:
                     cap_fdc = np.inf
                 
-                feasible = min(request, inventory_rdc[i], cap_fdc, remaining_outbound)
+                # Clip to feasible and enforce non-negativity
+                feasible = max(0.0, min(request, inventory_rdc[i], cap_fdc, remaining_outbound))
                 u[t, i, j] = feasible
                 inventory_rdc[i] -= feasible
                 fdc_total[j] += feasible
@@ -96,6 +97,8 @@ def random_feasible_u(instance: Instance, seed: int = None) -> np.ndarray:
                 if remaining_outbound <= 0:
                     break
     
+    # Defensive check (can be relaxed later if desired)
+    assert np.all(u >= 0), "random_feasible_u generated negative shipments"
     return u
 
 

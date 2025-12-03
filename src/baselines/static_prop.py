@@ -83,14 +83,14 @@ def static_proportional(instance: Instance) -> Tuple[float, np.ndarray]:
                 # Requested amount based on proportion
                 request = proportions[i, j] * min(avail_rdc, remaining_outbound)
                 
-                # FDC capacity constraint
+                # FDC capacity constraint (ensure non-negative slack)
                 if instance.fdc_capacity is not None:
-                    cap_left_fdc = instance.fdc_capacity[j] - fdc_total[j]
+                    cap_left_fdc = max(0.0, instance.fdc_capacity[j] - fdc_total[j])
                 else:
                     cap_left_fdc = np.inf
                 
-                # Clip to feasible
-                feasible = min(request, avail_rdc, cap_left_fdc, remaining_outbound)
+                # Clip to feasible and enforce non-negativity
+                feasible = max(0.0, min(request, avail_rdc, cap_left_fdc, remaining_outbound))
                 
                 shipments[t, i, j] = feasible
                 inventory_rdc[i] -= feasible

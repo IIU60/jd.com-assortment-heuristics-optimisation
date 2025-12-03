@@ -3,7 +3,9 @@
 import numpy as np
 from src.model import Instance, generate_instance, simulate
 from src.baselines import myopic_greedy, static_proportional, random_feasible
-from src.heuristics import simulated_annealing, tabu_search, greedy_constructor
+from src.heuristics import greedy_constructor
+from src.heuristics.utils import random_feasible_u
+from src.model.instance_generator import load_instance
 
 
 def test_small_instance():
@@ -73,4 +75,29 @@ def test_small_instance():
 
 if __name__ == '__main__':
     test_small_instance()
+    
+    # Sanity checks for random-based generators on a medium_20fdc_60sku instance (if present)
+    try:
+        print("\nRunning random-construction sanity checks on medium_20fdc_60sku_00...")
+        inst = load_instance("experiments/medium_20fdc_60sku/instances/medium_20fdc_60sku_00.json")
+        
+        # random_feasible_u
+        u0 = random_feasible_u(inst, seed=123)
+        assert np.all(u0 >= 0), "random_feasible_u produced negative shipments"
+        simulate(inst, u0, check_feasibility=True)
+        print("  random_feasible_u: non-negative and feasible")
+        
+        # random_feasible baseline
+        cost_rf, u_rf = random_feasible(inst, seed=123)
+        assert np.all(u_rf >= 0), "random_feasible baseline produced negative shipments"
+        simulate(inst, u_rf, check_feasibility=True)
+        print(f"  random_feasible baseline: non-negative and feasible (cost={cost_rf:.2f})")
+        
+        # static_proportional baseline
+        cost_sp, u_sp = static_proportional(inst)
+        assert np.all(u_sp >= 0), "static_proportional baseline produced negative shipments"
+        simulate(inst, u_sp, check_feasibility=True)
+        print(f"  static_proportional baseline: non-negative and feasible (cost={cost_sp:.2f})")
+    except FileNotFoundError:
+        print("\nSkipping medium_20fdc_60sku sanity checks (instance file not found).")
 
