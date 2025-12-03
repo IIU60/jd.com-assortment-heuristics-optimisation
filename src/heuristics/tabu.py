@@ -1,5 +1,6 @@
-"""Tabu Search heuristic."""
+"""Tabu Search heuristic (time-limited, single-start)."""
 
+import time
 import numpy as np
 import random
 from typing import Tuple, List, Dict, Optional
@@ -19,34 +20,25 @@ def tabu_search(
     u_init: np.ndarray,
     tabu_tenure: int = 5,
     max_iters: int = 200,
-    neighborhood_size: int = 30,
+    neighborhood_size: int = 8,
     max_no_improve: Optional[int] = 50,
     verbose: bool = False,
     seed: Optional[int] = None,
-    large_move_prob: float = 0.0
+    large_move_prob: float = 0.0,
+    time_limit: Optional[float] = None,
 ) -> Tuple[float, np.ndarray, List[float]]:
     """
-    Tabu Search over shipment plans.
+    Tabu Search over shipment plans (single-start, time-limited).
     
-    Uses random sampled neighborhood and a tabu list on move keys.
-    
-    Args:
-        instance: Problem instance
-        u_init: Initial shipment plan, shape (T, N, J)
-        tabu_tenure: Tabu list tenure (number of iterations to keep move tabu)
-        max_iters: Maximum number of iterations
-        neighborhood_size: Number of neighbors to sample per iteration
-        max_no_improve: Maximum iterations without improvement before early stopping (None to disable)
-        verbose: If True, print progress every 50 iterations
-        seed: Random seed (optional)
-    
-    Returns:
-        Tuple of (best_cost, best_u, cost_log)
-        cost_log is list of costs over iterations
+    Uses a sampled neighborhood and a simple tabu list on move keys.
+    Stops when either `time_limit` (if provided) or `max_iters` / `max_no_improve`
+    are reached.
     """
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
+    
+    start_time = time.perf_counter()
     
     current_u = copy_u(u_init)
     current_cost, _ = evaluate_u(instance, current_u)
@@ -62,34 +54,48 @@ def tabu_search(
     no_improve_count = 0
     
     for it in range(max_iters):
+        # Time-based stopping
+        if time_limit is not None:
+            elapsed = time.perf_counter() - start_time
+            if elapsed >= time_limit:
+                if verbose:
+                    print(f"Stopping Tabu due to time limit ({elapsed:.2f}s >= {time_limit:.2f}s)")
+                break
+        
         # Sample neighborhood
         candidates = []
         for _ in range(neighborhood_size):
             # Occasionally apply large moves to diversify neighborhood
             use_large_move = large_move_prob > 0.0 and random.random() < large_move_prob
             if use_large_move:
-                T = instance.T
+                T_horizon = instance.T
                 N = instance.num_products
                 i = random.randrange(N)
                 if random.random() < 0.5:
                     new_u = product_rebalance_move(current_u, instance, i)
-                    move_key = ('product_rebalance', i)
+                    move_key = ("product_rebalance", i)
                 else:
-                    window = random.randint(2, min(4, T))
-                    t_start = random.randrange(0, max(1, T - window + 1))
+                    window = random.randint(2, min(4, T_horizon))
+                    t_start = random.randrange(0, max(1, T_horizon - window + 1))
                     t_end = t_start + window - 1
                     new_u = block_replan_move(current_u, instance, i, t_start, t_end)
-                    move_key = ('block_replan', i, t_start, t_end)
+                    move_key = ("block_replan", i, t_start, t_end)
             else:
                 # Pass simulation result for problem-aware moves
                 new_u, move_key = generate_neighbor(
-                    instance, current_u,
+                    instance,
+                    current_u,
                     problem_aware_prob=0.3,
-                    simulation_result=cached_result
+                    simulation_result=cached_result,
                 )
             # Use incremental evaluation
-            cost, _, new_result = evaluate_u_incremental(instance, new_u, current_u, cached_result)
+            cost, _, new_result = evaluate_u_incremental(
+                instance, new_u, current_u, cached_result
+            )
             candidates.append((cost, new_u, move_key, new_result))
+        
+        if not candidates:
+            break
         
         # Update tabu tenures
         to_delete = []
@@ -145,8 +151,10 @@ def tabu_search(
         
         # Verbose output
         if verbose and (it + 1) % 50 == 0:
-            print(f"Iteration {it+1}/{max_iters}: best_cost={best_cost:.2f}, "
-                  f"current_cost={current_cost:.2f}, tabu_size={len(tabu_list)}")
+            print(
+                f"Iteration {it+1}/{max_iters}: best_cost={best_cost:.2f}, "
+                f"current_cost={current_cost:.2f}, tabu_size={len(tabu_list)}"
+            )
     
     return best_cost, best_u, cost_log
 
