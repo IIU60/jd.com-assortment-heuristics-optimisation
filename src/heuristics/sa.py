@@ -6,6 +6,7 @@ import math
 from typing import Tuple, List, Optional
 
 from ..model.instance import Instance
+from ..model.simulator import simulate
 from .utils import copy_u, evaluate_u
 from .neighborhoods import generate_neighbor
 
@@ -47,6 +48,9 @@ def simulated_annealing(
     
     current_u = copy_u(u_init)
     current_cost, _ = evaluate_u(instance, current_u)
+    # Cache simulation result for problem-aware moves
+    cached_result = simulate(instance, current_u, check_feasibility=False)
+    
     best_u = copy_u(current_u)
     best_cost = current_cost
     
@@ -85,8 +89,12 @@ def simulated_annealing(
     no_improve_count = 0
     
     for k in range(max_iters):
-        # Generate neighbor
-        candidate_u, _ = generate_neighbor(instance, current_u)
+        # Generate neighbor (with problem-aware moves)
+        candidate_u, _ = generate_neighbor(
+            instance, current_u,
+            problem_aware_prob=0.3,
+            simulation_result=cached_result
+        )
         candidate_cost, _ = evaluate_u(instance, candidate_u)
         
         delta = candidate_cost - current_cost
@@ -95,6 +103,8 @@ def simulated_annealing(
         if delta <= 0 or random.random() < math.exp(-delta / max(T, 1e-9)):
             current_u = candidate_u
             current_cost = candidate_cost
+            # Update cached result for next iteration
+            cached_result = simulate(instance, current_u, check_feasibility=False)
             
             if current_cost < best_cost:
                 best_cost = current_cost

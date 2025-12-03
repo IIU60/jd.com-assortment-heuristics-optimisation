@@ -60,7 +60,12 @@ def tabu_search(
         # Sample neighborhood
         candidates = []
         for _ in range(neighborhood_size):
-            new_u, move_key = generate_neighbor(instance, current_u)
+            # Pass simulation result for problem-aware moves
+            new_u, move_key = generate_neighbor(
+                instance, current_u, 
+                problem_aware_prob=0.3,
+                simulation_result=cached_result
+            )
             # Use incremental evaluation
             cost, _, new_result = evaluate_u_incremental(instance, new_u, current_u, cached_result)
             candidates.append((cost, new_u, move_key, new_result))
