@@ -11,31 +11,27 @@ except ImportError:
 from .instance import Instance
 
 
-def solve_exact(instance: Instance, time_limit: Optional[float] = None) -> Tuple[Optional[float], Optional[np.ndarray]]:
+def solve_exact(instance: Instance, time_limit: Optional[float] = 60.0) -> Tuple[Optional[float], Optional[np.ndarray]]:
     """
-    Solve instance to optimality using MIP (only for small instances).
+    Solve instance to optimality using MIP.
     
-    Only runs on instances with N <= 5, J <= 3, T <= 4.
     Uses PuLP (or Gurobi if available) to solve the full MIP formulation.
+    If time limit is exceeded, returns None to indicate the instance was too difficult.
     
     Args:
-        instance: Problem instance (must be small)
-        time_limit: Time limit in seconds (None = no limit)
+        instance: Problem instance
+        time_limit: Time limit in seconds (default: 60 seconds)
     
     Returns:
         Tuple of (optimal_cost, optimal_shipments)
-        Returns (None, None) if instance is too large or solver unavailable
+        Returns (None, None) if solver unavailable, time limit exceeded, or solver failed
     """
     if not PULP_AVAILABLE:
         print("Warning: PuLP not available. Install with: pip install pulp")
         return None, None
     
-    # Check instance size
-    if instance.num_products > 5 or instance.num_fdcs > 3 or instance.T > 4:
-        print(f"Warning: Instance too large for exact solver "
-              f"(N={instance.num_products}, J={instance.num_fdcs}, T={instance.T}). "
-              f"Max: N=5, J=3, T=4")
-        return None, None
+    if time_limit is None:
+        time_limit = 60.0  # Default 60 seconds
     
     T = instance.T
     N = instance.num_products
@@ -170,14 +166,22 @@ def solve_exact(instance: Instance, time_limit: Optional[float] = None) -> Tuple
                     instance.fdc_capacity[j]
                 )
     
-    # Solve
-    if time_limit is not None:
-        prob.solve(pulp.PULP_CBC_CMD(timeLimit=time_limit, msg=0))
-    else:
-        prob.solve(pulp.PULP_CBC_CMD(msg=0))
+    # Solve with time limit
+    prob.solve(pulp.PULP_CBC_CMD(timeLimit=time_limit, msg=0))
     
-    if prob.status != pulp.LpStatusOptimal:
-        print(f"Warning: MIP solver status: {pulp.LpStatus[prob.status]}")
+    # Check solver status
+    if prob.status == pulp.LpStatusOptimal:
+        # Optimal solution found
+        pass
+    elif prob.status == pulp.LpStatusNotSolved:
+        # Time limit exceeded or other issue
+        print(f"Warning: MIP solver did not solve within time limit ({time_limit}s) "
+              f"for instance (N={N}, J={J}, T={T})")
+        return None, None
+    else:
+        # Other solver status (infeasible, unbounded, etc.)
+        print(f"Warning: MIP solver status: {pulp.LpStatus[prob.status]} "
+              f"for instance (N={N}, J={J}, T={T})")
         return None, None
     
     # Extract solution

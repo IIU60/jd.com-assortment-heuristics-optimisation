@@ -106,6 +106,16 @@ def run_all_algorithms_on_instance(
             
             runtime = time.perf_counter() - start
             
+            # Handle None returns (e.g., MIP solver timed out)
+            if cost is None or shipments is None:
+                results[alg_name] = {
+                    'error': 'Solver timed out or failed',
+                    'cost': None,
+                    'runtime': runtime if runtime else None,
+                    'skipped': True
+                }
+                continue
+            
             # Evaluate
             result = simulate(instance, shipments, check_feasibility=False)
             
@@ -160,7 +170,8 @@ def run_all_experiments(
     instances_dir: str = 'instances',
     output_dir: str = 'results',
     sa_params: Dict[str, Any] = None,
-    tabu_params: Dict[str, Any] = None
+    tabu_params: Dict[str, Any] = None,
+    mip_max_time: float = 120.0
 ) -> None:
     """
     Run all algorithms on all instances and save results.
@@ -170,6 +181,7 @@ def run_all_experiments(
         output_dir: Directory to save results
         sa_params: SA parameters (T0, alpha, max_iters)
         tabu_params: Tabu Search parameters (tabu_tenure, max_iters, neighborhood_size)
+        mip_max_time: Maximum time limit for MIP solver in seconds (default: 120)
     """
     from pathlib import Path
     from ..model.instance_generator import load_instance
@@ -226,6 +238,19 @@ def run_all_experiments(
             cost, _ = evaluate_u(inst, u)
             return cost, u
         
+        def mip_wrapper(inst):
+            from ..model.mip_solver import solve_exact
+            import numpy as np
+            # Use reasonable time limit based on instance size
+            # Larger instances get more time, but cap at mip_max_time
+            time_limit = min(30.0 + (inst.num_products * inst.num_fdcs * inst.T) * 0.1, mip_max_time)
+            optimal_cost, optimal_u = solve_exact(inst, time_limit=time_limit)
+            if optimal_cost is None or optimal_u is None:
+                # Solver failed or timed out - return a sentinel value
+                # The runner will handle None gracefully
+                return None, None
+            return optimal_cost, optimal_u
+        
         alg_dict = {
             'myopic': myopic_greedy,
             'static_prop': static_proportional,
@@ -233,7 +258,8 @@ def run_all_experiments(
             'greedy': greedy_wrapper,
             'grasp': grasp_wrapper,
             'sa': sa_wrapper,
-            'tabu': tabu_wrapper
+            'tabu': tabu_wrapper,
+            'mip': mip_wrapper
         }
         
         # Run all algorithms
@@ -248,9 +274,9 @@ def run_all_experiments(
         # Save individual instance results
         save_results(results, str(output_path / f"{instance_file.stem}_results.json"))
         
-        # Collect for summary
+        # Collect for summary (skip algorithms that failed or were skipped)
         for alg_name, alg_results in results.items():
-            if 'cost' in alg_results and alg_results['cost'] is not None:
+            if 'cost' in alg_results and alg_results['cost'] is not None and not alg_results.get('skipped', False):
                 all_results.append({
                     'instance': instance_file.stem,
                     'instance_type': instance_type,

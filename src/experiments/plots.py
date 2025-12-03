@@ -157,14 +157,17 @@ def create_all_plots(results: Dict[str, Dict[str, Any]] = None, results_df: pd.D
     if results_df is not None and not results_df.empty:
         # Cost comparison from DataFrame
         if 'cost' in results_df.columns:
-            plt.figure(figsize=(10, 6))
-            results_df.boxplot(column='cost', by='algorithm', ax=plt.gca())
+            plt.figure(figsize=(12, 6))
+            # Use groupby for better control
+            algorithms = sorted(results_df['algorithm'].unique())
+            data_to_plot = [results_df[results_df['algorithm'] == alg]['cost'].values for alg in algorithms]
+            plt.boxplot(data_to_plot, labels=algorithms)
             plt.ylabel('Total Cost')
             plt.title('Cost Comparison Across Algorithms')
-            plt.suptitle('')  # Remove default title
-            plt.xticks(rotation=45)
+            plt.xticks(rotation=45, ha='right')
+            plt.grid(True, alpha=0.3)
             plt.tight_layout()
-            plt.savefig(f'{output_dir}/cost_comparison.png')
+            plt.savefig(f'{output_dir}/cost_comparison.png', dpi=150)
             plt.close()
             print(f"Saved plot to {output_dir}/cost_comparison.png")
         

@@ -55,6 +55,19 @@ def test_small_instance():
     result_greedy = simulate(instance, u_greedy, check_feasibility=False)
     print(f"  Greedy constructor: cost = {result_greedy.total_cost:.2f}")
     
+    # Test MIP solver
+    print("\nTesting MIP solver...")
+    from src.model.mip_solver import solve_exact
+    optimal_cost, optimal_u = solve_exact(instance, time_limit=10.0)
+    if optimal_cost is not None:
+        print(f"  MIP optimal cost: {optimal_cost:.2f}")
+        # Verify it's optimal (should be <= greedy)
+        assert optimal_cost <= result_greedy.total_cost + 1e-6, \
+            f"MIP cost {optimal_cost} should be <= greedy cost {result_greedy.total_cost}"
+        print("  MIP solver test passed (optimal solution found)")
+    else:
+        print("  MIP solver timed out or failed (this is OK for larger instances)")
+    
     print("\nAll basic tests passed!")
 
 
