@@ -186,12 +186,25 @@ def solve_exact(instance: Instance, time_limit: Optional[float] = 60.0) -> Tuple
     
     # Extract solution
     optimal_cost = pulp.value(prob.objective)
+    if optimal_cost is None:
+        print(f"Warning: MIP solver returned None objective value")
+        return None, None
+    
     optimal_shipments = np.zeros((T, N, J), dtype=float)
     
     for t in range(T):
         for i in range(N):
             for j in range(J):
-                optimal_shipments[t, i, j] = pulp.value(u[t, i, j])
+                val = pulp.value(u[t, i, j])
+                if val is None:
+                    print(f"Warning: MIP variable u[{t},{i},{j}] is None")
+                    return None, None
+                optimal_shipments[t, i, j] = max(0.0, float(val))  # Ensure non-negative
+    
+    # Final validation
+    if np.any(optimal_shipments < 0) or np.any(np.isnan(optimal_shipments)):
+        print(f"Warning: MIP solution contains invalid values")
+        return None, None
     
     return optimal_cost, optimal_shipments
 
