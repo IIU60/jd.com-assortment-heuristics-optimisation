@@ -15,6 +15,7 @@ def tabu_search(
     tabu_tenure: int = 5,
     max_iters: int = 200,
     neighborhood_size: int = 30,
+    max_no_improve: Optional[int] = 50,
     verbose: bool = False,
     seed: Optional[int] = None
 ) -> Tuple[float, np.ndarray, List[float]]:
@@ -29,6 +30,7 @@ def tabu_search(
         tabu_tenure: Tabu list tenure (number of iterations to keep move tabu)
         max_iters: Maximum number of iterations
         neighborhood_size: Number of neighbors to sample per iteration
+        max_no_improve: Maximum iterations without improvement before early stopping (None to disable)
         verbose: If True, print progress every 50 iterations
         seed: Random seed (optional)
     
@@ -47,6 +49,7 @@ def tabu_search(
     
     cost_log = [current_cost]
     tabu_list: Dict[Tuple, int] = {}  # move_key -> remaining tenure
+    no_improve_count = 0
     
     for it in range(max_iters):
         # Sample neighborhood
@@ -92,11 +95,20 @@ def tabu_search(
         if current_cost < best_cost:
             best_cost = current_cost
             best_u = copy_u(current_u)
+            no_improve_count = 0  # Reset counter on improvement
+        else:
+            no_improve_count += 1
         
         # Add to tabu list
         tabu_list[chosen_key] = tabu_tenure
         
         cost_log.append(best_cost)
+        
+        # Early stopping if no improvement
+        if max_no_improve is not None and no_improve_count >= max_no_improve:
+            if verbose:
+                print(f"Stopping early: no improvement for {max_no_improve} iterations")
+            break
         
         # Verbose output
         if verbose and (it + 1) % 50 == 0:

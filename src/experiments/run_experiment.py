@@ -129,8 +129,8 @@ Examples:
     parser.add_argument(
         '--sa-t0',
         type=float,
-        default=100000.0,
-        help='SA initial temperature (default: 100000.0)'
+        default=None,
+        help='SA initial temperature (default: None, uses adaptive T0 to achieve 90%% acceptance rate)'
     )
     
     parser.add_argument(
@@ -165,8 +165,8 @@ Examples:
     parser.add_argument(
         '--tabu-nh-size',
         type=int,
-        default=30,
-        help='Tabu neighborhood size (default: 30)'
+        default=10,
+        help='Tabu neighborhood size (default: 10)'
     )
     
     # MIP parameters
@@ -202,10 +202,12 @@ Examples:
     
     # Prepare parameters
     sa_params = {
-        'T0': args.sa_t0,
         'alpha': args.sa_alpha,
-        'max_iters': args.sa_iters
+        'max_iters': args.sa_iters,
+        'max_no_improve': 100
     }
+    if args.sa_t0 is not None:
+        sa_params['T0'] = args.sa_t0
     
     tabu_params = {
         'tabu_tenure': args.tabu_tenure,
@@ -214,7 +216,8 @@ Examples:
     }
     
     print(f"\nAlgorithm parameters:")
-    print(f"  SA: T0={sa_params['T0']}, alpha={sa_params['alpha']}, iters={sa_params['max_iters']}")
+    sa_t0_str = f"T0={sa_params.get('T0', 'adaptive')}"
+    print(f"  SA: {sa_t0_str}, alpha={sa_params['alpha']}, iters={sa_params['max_iters']}")
     print(f"  Tabu: tenure={tabu_params['tabu_tenure']}, iters={tabu_params['max_iters']}, nh_size={tabu_params['neighborhood_size']}")
     print(f"  MIP: max_time={args.mip_time}s")
     

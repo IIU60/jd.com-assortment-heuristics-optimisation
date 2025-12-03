@@ -121,7 +121,7 @@ def generate_neighbor(
     instance: Instance,
     u: np.ndarray,
     move_probs: Optional[Dict[str, float]] = None,
-    delta_choices: Tuple[float, ...] = (5.0, 10.0, 20.0)
+    delta_choices: Optional[Tuple[float, ...]] = None
 ) -> Tuple[np.ndarray, Tuple[str, ...]]:
     """
     Generate a random neighbor using one of the move operators.
@@ -133,6 +133,7 @@ def generate_neighbor(
             Keys: 'time_shift', 'fdc_swap', 'magnitude_tweak'
             If None, uses equal probabilities
         delta_choices: Possible delta values for moves
+            If None, computes adaptive deltas based on problem scale
     
     Returns:
         Tuple of (new_u, move_key)
@@ -148,6 +149,22 @@ def generate_neighbor(
             'fdc_swap': 0.33,
             'magnitude_tweak': 0.34
         }
+    
+    # Compute adaptive deltas if not provided
+    if delta_choices is None:
+        # Calculate average demand to scale deltas appropriately
+        avg_demand = np.mean(instance.demand_fdc[instance.demand_fdc > 0])
+        if avg_demand > 0:
+            # Use 10%, 20%, 30% of average demand as deltas
+            # Apply minimum thresholds to avoid tiny values
+            delta_choices = (
+                max(5.0, avg_demand * 0.10),
+                max(10.0, avg_demand * 0.20),
+                max(20.0, avg_demand * 0.30)
+            )
+        else:
+            # Fallback to fixed values if no demand
+            delta_choices = (5.0, 10.0, 20.0)
     
     # Select move type
     r = random.random()

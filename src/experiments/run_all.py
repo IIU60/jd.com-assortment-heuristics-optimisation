@@ -194,9 +194,9 @@ def run_all_experiments(
     import pandas as pd
     
     if sa_params is None:
-        sa_params = {'T0': 100000.0, 'alpha': 0.95, 'max_iters': 500}
+        sa_params = {'alpha': 0.95, 'max_iters': 500, 'max_no_improve': 100}
     if tabu_params is None:
-        tabu_params = {'tabu_tenure': 5, 'max_iters': 200, 'neighborhood_size': 30}
+        tabu_params = {'tabu_tenure': 5, 'max_iters': 200, 'neighborhood_size': 10, 'max_no_improve': 50}
     
     # Load instances
     instances_path = Path(instances_dir)
@@ -219,12 +219,48 @@ def run_all_experiments(
         
         # Prepare algorithm dictionary
         def sa_wrapper(inst):
-            u0 = random_feasible_u(inst, seed=42)
+            # Start from best available solution (myopic, greedy, or GRASP)
+            candidates = []
+            # Myopic
+            _, u_myopic = myopic_greedy(inst)
+            cost_myopic, _ = evaluate_u(inst, u_myopic)
+            candidates.append((cost_myopic, u_myopic))
+            
+            # Greedy construction
+            u_greedy = greedy_constructor(inst)
+            cost_greedy, _ = evaluate_u(inst, u_greedy)
+            candidates.append((cost_greedy, u_greedy))
+            
+            # GRASP
+            u_grasp = grasp_constructor(inst, alpha=0.5, seed=42)
+            cost_grasp, _ = evaluate_u(inst, u_grasp)
+            candidates.append((cost_grasp, u_grasp))
+            
+            # Start from best
+            u0 = min(candidates, key=lambda x: x[0])[1]
             cost, best_u, _ = simulated_annealing(inst, u0, seed=42, **sa_params)
             return cost, best_u
         
         def tabu_wrapper(inst):
-            u0 = random_feasible_u(inst, seed=42)
+            # Start from best available solution (myopic, greedy, or GRASP)
+            candidates = []
+            # Myopic
+            _, u_myopic = myopic_greedy(inst)
+            cost_myopic, _ = evaluate_u(inst, u_myopic)
+            candidates.append((cost_myopic, u_myopic))
+            
+            # Greedy construction
+            u_greedy = greedy_constructor(inst)
+            cost_greedy, _ = evaluate_u(inst, u_greedy)
+            candidates.append((cost_greedy, u_greedy))
+            
+            # GRASP
+            u_grasp = grasp_constructor(inst, alpha=0.5, seed=42)
+            cost_grasp, _ = evaluate_u(inst, u_grasp)
+            candidates.append((cost_grasp, u_grasp))
+            
+            # Start from best
+            u0 = min(candidates, key=lambda x: x[0])[1]
             cost, best_u, _ = tabu_search(inst, u0, seed=42, **tabu_params)
             return cost, best_u
         
