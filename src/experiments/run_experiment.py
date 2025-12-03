@@ -147,6 +147,20 @@ Examples:
         help='SA max iterations (default: 500)'
     )
     
+    parser.add_argument(
+        '--sa-num-starts',
+        type=int,
+        default=3,
+        help='SA number of diversified starting solutions (default: 3)'
+    )
+    
+    parser.add_argument(
+        '--sa-large-move-prob',
+        type=float,
+        default=0.1,
+        help='SA probability of applying a large destroy-repair move (default: 0.1)'
+    )
+    
     # Tabu parameters
     parser.add_argument(
         '--tabu-tenure',
@@ -167,6 +181,20 @@ Examples:
         type=int,
         default=10,
         help='Tabu neighborhood size (default: 10)'
+    )
+    
+    parser.add_argument(
+        '--tabu-num-starts',
+        type=int,
+        default=2,
+        help='Tabu number of diversified starting solutions (default: 2)'
+    )
+    
+    parser.add_argument(
+        '--tabu-large-move-prob',
+        type=float,
+        default=0.1,
+        help='Tabu probability of applying a large destroy-repair move (default: 0.1)'
     )
     
     # MIP parameters
@@ -204,7 +232,9 @@ Examples:
     sa_params = {
         'alpha': args.sa_alpha,
         'max_iters': args.sa_iters,
-        'max_no_improve': 100
+        'max_no_improve': 100,
+        'num_starts': args.sa_num_starts,
+        'large_move_prob': args.sa_large_move_prob,
     }
     if args.sa_t0 is not None:
         sa_params['T0'] = args.sa_t0
@@ -212,7 +242,9 @@ Examples:
     tabu_params = {
         'tabu_tenure': args.tabu_tenure,
         'max_iters': args.tabu_iters,
-        'neighborhood_size': args.tabu_nh_size
+        'neighborhood_size': args.tabu_nh_size,
+        'num_starts': args.tabu_num_starts,
+        'large_move_prob': args.tabu_large_move_prob,
     }
     
     print(f"\nAlgorithm parameters:")

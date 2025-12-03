@@ -188,15 +188,32 @@ def run_all_experiments(
     from ..baselines import myopic_greedy, static_proportional, random_feasible
     from ..heuristics.sa import simulated_annealing
     from ..heuristics.tabu import tabu_search
-    from ..heuristics.construction import greedy_constructor, grasp_constructor
+    from ..heuristics.construction import greedy_constructor, grasp_constructor, build_starting_pool
     from ..heuristics.utils import random_feasible_u, evaluate_u
     from .plots import create_all_plots
     import pandas as pd
     
     if sa_params is None:
-        sa_params = {'alpha': 0.95, 'max_iters': 1000, 'max_no_improve': 200}  # More iterations, relaxed early stopping
+        sa_params = {
+            'alpha': 0.95,
+            'max_iters': 1000,
+            'max_no_improve': 200,
+            'num_starts': 3,
+            'large_move_prob': 0.1,
+            # start_mode: 'pool' (default, diversified pool from constructions)
+            #          or 'random' (pure random_feasible_u starts)
+        }  # Multi-start with occasional large moves
     if tabu_params is None:
-        tabu_params = {'tabu_tenure': 5, 'max_iters': 500, 'neighborhood_size': 15, 'max_no_improve': 100}  # More iterations, larger neighborhood
+        tabu_params = {
+            'tabu_tenure': 5,
+            'max_iters': 500,
+            'neighborhood_size': 15,
+            'max_no_improve': 100,
+            'num_starts': 2,
+            'large_move_prob': 0.1,
+            # start_mode: 'pool' (default, diversified pool from constructions)
+            #          or 'random' (pure random_feasible_u starts)
+        }  # Multi-start Tabu with occasional large moves
     
     # Load instances
     instances_path = Path(instances_dir)
@@ -217,60 +234,103 @@ def run_all_experiments(
         instance = load_instance(str(instance_file))
         instance_type = 'small' if instance.num_products <= 10 else 'medium'
         
+        # Multi-start parameters for heuristics
+        sa_num_starts = int(sa_params.get('num_starts', 3))
+        sa_large_move_prob = float(sa_params.get('large_move_prob', 0.0))
+        sa_base_max_iters = int(sa_params.get('max_iters', 1000))
+        sa_start_mode = str(sa_params.get('start_mode', 'pool'))
+        # Split total iterations across starts (but keep a sensible minimum)
+        sa_iters_per_start = max(50, sa_base_max_iters // max(1, sa_num_starts))
+        
+        tabu_num_starts = int(tabu_params.get('num_starts', 2))
+        tabu_large_move_prob = float(tabu_params.get('large_move_prob', 0.0))
+        tabu_base_max_iters = int(tabu_params.get('max_iters', 500))
+        tabu_iters_per_start = max(50, tabu_base_max_iters // max(1, tabu_num_starts))
+        
         # Prepare algorithm dictionary
         def sa_wrapper(inst):
-            # Start from second-best solution to give room for improvement
-            # This allows SA to explore and potentially find better solutions
-            candidates = []
-            # Myopic
-            _, u_myopic = myopic_greedy(inst)
-            cost_myopic, _ = evaluate_u(inst, u_myopic)
-            candidates.append((cost_myopic, u_myopic, 'myopic'))
+            best_cost = np.inf
+            best_u = None
+
+            if sa_start_mode == 'random':
+                # Pure random-feasible starts (no myopic/greedy constructions)
+                for s in range(sa_num_starts):
+                    u0 = random_feasible_u(inst, seed=42 + s)
+                    cost, u_sa, _ = simulated_annealing(
+                        inst,
+                        u0,
+                        T0=sa_params.get('T0', None),
+                        alpha=sa_params.get('alpha', 0.95),
+                        max_iters=sa_iters_per_start,
+                        max_no_improve=sa_params.get('max_no_improve', 100),
+                        seed=42 + s,
+                        large_move_prob=sa_large_move_prob,
+                    )
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_u = u_sa
+            else:
+                # Default: diversified pool from myopic/greedy/GRASP constructions
+                starting_pool = build_starting_pool(inst, max_starts=sa_num_starts, seed=42)
+                for start in starting_pool:
+                    u0 = start['u']
+                    cost, u_sa, _ = simulated_annealing(
+                        inst,
+                        u0,
+                        T0=sa_params.get('T0', None),
+                        alpha=sa_params.get('alpha', 0.95),
+                        max_iters=sa_iters_per_start,
+                        max_no_improve=sa_params.get('max_no_improve', 100),
+                        seed=42,
+                        large_move_prob=sa_large_move_prob,
+                    )
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_u = u_sa
             
-            # Greedy construction
-            u_greedy = greedy_constructor(inst)
-            cost_greedy, _ = evaluate_u(inst, u_greedy)
-            candidates.append((cost_greedy, u_greedy, 'greedy'))
-            
-            # GRASP
-            u_grasp = grasp_constructor(inst, alpha=0.5, seed=42)
-            cost_grasp, _ = evaluate_u(inst, u_grasp)
-            candidates.append((cost_grasp, u_grasp, 'grasp'))
-            
-            # Sort by cost - start from myopic (best) but with more exploration
-            candidates.sort(key=lambda x: x[0])
-            # Start from myopic (best) - algorithms should be able to improve or at least match it
-            u0 = candidates[0][1]  # Best (myopic)
-            
-            cost, best_u, _ = simulated_annealing(inst, u0, seed=42, **sa_params)
-            return cost, best_u
+            return best_cost, best_u
         
         def tabu_wrapper(inst):
-            # Start from second-best solution to give room for improvement
-            # This allows Tabu to explore and potentially find better solutions
-            candidates = []
-            # Myopic
-            _, u_myopic = myopic_greedy(inst)
-            cost_myopic, _ = evaluate_u(inst, u_myopic)
-            candidates.append((cost_myopic, u_myopic, 'myopic'))
+            best_cost = np.inf
+            best_u = None
+
+            if str(tabu_params.get('start_mode', 'pool')) == 'random':
+                # Pure random-feasible starts
+                for s in range(tabu_num_starts):
+                    u0 = random_feasible_u(inst, seed=43 + s)
+                    cost, u_tabu, _ = tabu_search(
+                        inst,
+                        u0,
+                        tabu_tenure=tabu_params.get('tabu_tenure', 5),
+                        max_iters=tabu_iters_per_start,
+                        neighborhood_size=tabu_params.get('neighborhood_size', 15),
+                        max_no_improve=tabu_params.get('max_no_improve', 100),
+                        seed=43 + s,
+                        large_move_prob=tabu_large_move_prob,
+                    )
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_u = u_tabu
+            else:
+                # Default: diversified pool from myopic/greedy/GRASP constructions
+                starting_pool = build_starting_pool(inst, max_starts=tabu_num_starts, seed=43)
+                for start in starting_pool:
+                    u0 = start['u']
+                    cost, u_tabu, _ = tabu_search(
+                        inst,
+                        u0,
+                        tabu_tenure=tabu_params.get('tabu_tenure', 5),
+                        max_iters=tabu_iters_per_start,
+                        neighborhood_size=tabu_params.get('neighborhood_size', 15),
+                        max_no_improve=tabu_params.get('max_no_improve', 100),
+                        seed=43,
+                        large_move_prob=tabu_large_move_prob,
+                    )
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_u = u_tabu
             
-            # Greedy construction
-            u_greedy = greedy_constructor(inst)
-            cost_greedy, _ = evaluate_u(inst, u_greedy)
-            candidates.append((cost_greedy, u_greedy, 'greedy'))
-            
-            # GRASP
-            u_grasp = grasp_constructor(inst, alpha=0.5, seed=42)
-            cost_grasp, _ = evaluate_u(inst, u_grasp)
-            candidates.append((cost_grasp, u_grasp, 'grasp'))
-            
-            # Sort by cost - start from myopic (best) but with more exploration
-            candidates.sort(key=lambda x: x[0])
-            # Start from myopic (best) - algorithms should be able to improve or at least match it
-            u0 = candidates[0][1]  # Best (myopic)
-            
-            cost, best_u, _ = tabu_search(inst, u0, seed=42, **tabu_params)
-            return cost, best_u
+            return best_cost, best_u
         
         def greedy_wrapper(inst):
             u = greedy_constructor(inst)

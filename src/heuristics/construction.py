@@ -2,10 +2,12 @@
 
 import numpy as np
 import random
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from ..model.instance import Instance
-from .utils import clamp_u_to_feasibility
+from ..baselines import myopic_greedy
+from .utils import clamp_u_to_feasibility, evaluate_u
+from .neighborhoods import generate_neighbor
 
 
 def greedy_constructor(instance: Instance) -> np.ndarray:
@@ -230,4 +232,84 @@ def grasp_constructor(
     shipments = clamp_u_to_feasibility(instance, shipments)
     
     return shipments
+
+
+def build_starting_pool(
+    instance: Instance,
+    max_starts: int = 4,
+    seed: int = 42
+) -> List[Dict[str, Any]]:
+    """
+    Build a diversified pool of high-quality starting solutions.
+    
+    Includes:
+    - Myopic greedy baseline
+    - Greedy constructor
+    - GRASP with different alphas / seeds
+    - A lightly perturbed variant of myopic (stochastic smoothing)
+    
+    Args:
+        instance: Problem instance
+        max_starts: Maximum number of starting solutions to return
+        seed: Base random seed for reproducibility
+    
+    Returns:
+        List of dictionaries with keys: 'name', 'cost', 'u'
+    """
+    rng = np.random.RandomState(seed)
+    random.seed(seed)
+    
+    starts: List[Dict[str, Any]] = []
+    
+    # 1) Myopic greedy
+    cost_myopic, u_myopic = myopic_greedy(instance)
+    starts.append({'name': 'myopic', 'cost': float(cost_myopic), 'u': u_myopic})
+    
+    # 2) Greedy constructor
+    u_greedy = greedy_constructor(instance)
+    cost_greedy, _ = evaluate_u(instance, u_greedy)
+    starts.append({'name': 'greedy', 'cost': float(cost_greedy), 'u': u_greedy})
+    
+    # 3) GRASP with different alphas / seeds
+    grasp_configs = [
+        (0.3, seed + 1),
+        (0.7, seed + 2),
+    ]
+    for alpha, s in grasp_configs:
+        u_grasp = grasp_constructor(instance, alpha=alpha, seed=s)
+        cost_grasp, _ = evaluate_u(instance, u_grasp)
+        starts.append({
+            'name': f'grasp_{alpha:.1f}',
+            'cost': float(cost_grasp),
+            'u': u_grasp
+        })
+    
+    # 4) Stochastic smoothing of myopic: apply a few neighbor moves
+    #    to introduce structural diversity around a strong baseline.
+    try:
+        u_smooth = np.copy(u_myopic)
+        # Apply a small number of problem-aware neighbor moves
+        from ..model.simulator import simulate
+        cached_result = simulate(instance, u_smooth, check_feasibility=False)
+        for _ in range(5):
+            u_candidate, _ = generate_neighbor(
+                instance,
+                u_smooth,
+                problem_aware_prob=0.5,
+                simulation_result=cached_result,
+            )
+            # Accept if it improves or with small probability to diversify
+            cost_current, _ = evaluate_u(instance, u_smooth)
+            cost_candidate, _ = evaluate_u(instance, u_candidate)
+            if cost_candidate <= cost_current or rng.rand() < 0.2:
+                u_smooth = u_candidate
+        cost_smooth, _ = evaluate_u(instance, u_smooth)
+        starts.append({'name': 'myopic_smooth', 'cost': float(cost_smooth), 'u': u_smooth})
+    except Exception:
+        # In case anything goes wrong, just skip the smoothed variant
+        pass
+    
+    # Sort by cost (best first) and truncate
+    starts.sort(key=lambda s: s['cost'])
+    return starts[:max_starts]
 

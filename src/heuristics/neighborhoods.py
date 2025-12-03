@@ -118,6 +118,110 @@ def magnitude_tweak(
     return new_u
 
 
+def product_rebalance_move(
+    u: np.ndarray,
+    instance: Instance,
+    i: int
+) -> np.ndarray:
+    """
+    Large move: rebalance shipments for product i across all FDCs
+    over the entire horizon, keeping per-period total shipments similar.
+    
+    Args:
+        u: Current shipment plan, shape (T, N, J)
+        instance: Problem instance
+        i: Product index to rebalance
+    
+    Returns:
+        New shipment plan (copy)
+    """
+    new_u = copy_u(u)
+    T = instance.T
+    J = instance.num_fdcs
+    
+    # Compute weights per FDC based on average demand and transfer cost
+    demand_ij = np.mean(instance.demand_fdc[:, i, :], axis=0)  # shape (J,)
+    cost_ij = instance.transfer_cost[i, :]  # shape (J,)
+    # Higher demand, lower cost preferred
+    weights = (demand_ij + 1.0) / (cost_ij + 1.0)
+    if np.sum(weights) <= 0:
+        weights = np.ones_like(weights)
+    weights = weights / np.sum(weights)
+    
+    for t in range(T):
+        total_t = float(np.sum(new_u[t, i, :]))
+        if total_t <= 0:
+            continue
+        # Redistribute total shipments at period t according to weights
+        new_u[t, i, :] = total_t * weights
+    
+    new_u = clamp_u_to_feasibility(instance, new_u)
+    return new_u
+
+
+def block_replan_move(
+    u: np.ndarray,
+    instance: Instance,
+    i: int,
+    t_start: int,
+    t_end: int
+) -> np.ndarray:
+    """
+    Large move: replan shipments for a product i over a time window.
+    
+    Uses future demand and transfer cost to greedily allocate shipments
+    in the window, then clamps to feasibility.
+    
+    Args:
+        u: Current shipment plan, shape (T, N, J)
+        instance: Problem instance
+        i: Product index
+        t_start: Start period (inclusive)
+        t_end: End period (inclusive)
+    
+    Returns:
+        New shipment plan (copy)
+    """
+    new_u = copy_u(u)
+    T = instance.T
+    J = instance.num_fdcs
+    
+    t_start = max(0, min(t_start, T - 1))
+    t_end = max(t_start, min(t_end, T - 1))
+    
+    # Precompute future demand for this product
+    future_demand = np.zeros((T, J), dtype=float)
+    for t in range(T):
+        future_demand[t, :] = np.sum(instance.demand_fdc[t:, i, :], axis=0)
+    
+    for t in range(t_start, t_end + 1):
+        # Zero out current shipments in the window for this product
+        new_u[t, i, :] = 0.0
+        
+        # Use a fraction of future demand as a target volume
+        scores = np.zeros(J, dtype=float)
+        for j in range(J):
+            if future_demand[t, j] > 0:
+                scores[j] = future_demand[t, j] / (instance.transfer_cost[i, j] + 1.0)
+        if np.all(scores <= 0):
+            continue
+        
+        # Normalize scores to get proportions
+        total_score = np.sum(scores)
+        proportions = scores / total_score
+        
+        # Target volume: 40% of cumulative future demand for this period
+        target_volume = 0.4 * np.sum(future_demand[t, :])
+        if target_volume <= 0:
+            continue
+        
+        for j in range(J):
+            new_u[t, i, j] = target_volume * proportions[j]
+    
+    new_u = clamp_u_to_feasibility(instance, new_u)
+    return new_u
+
+
 def generate_neighbor(
     instance: Instance,
     u: np.ndarray,
@@ -159,9 +263,11 @@ def generate_neighbor(
     
     if move_probs is None:
         move_probs = {
-            'time_shift': 0.33,
-            'fdc_swap': 0.33,
-            'magnitude_tweak': 0.34
+            'time_shift': 0.25,
+            'fdc_swap': 0.25,
+            'magnitude_tweak': 0.30,
+            'product_rebalance': 0.10,
+            'block_replan': 0.10,
         }
     
     # Compute adaptive deltas if not provided
@@ -182,7 +288,7 @@ def generate_neighbor(
     
     # Select move type
     r = random.random()
-    if r < move_probs.get('magnitude_tweak', 0.34):
+    if r < move_probs.get('magnitude_tweak', 0.30):
         # Magnitude tweak
         t = random.randrange(T)
         i = random.randrange(N)
@@ -194,7 +300,7 @@ def generate_neighbor(
         new_u = magnitude_tweak(u, instance, i, j, t, delta)
         move_key = ('magnitude_tweak', t, i, j)
     
-    elif r < move_probs.get('magnitude_tweak', 0.34) + move_probs.get('fdc_swap', 0.33):
+    elif r < move_probs.get('magnitude_tweak', 0.30) + move_probs.get('fdc_swap', 0.25):
         # FDC swap
         t = random.randrange(T)
         i = random.randrange(N)
@@ -207,7 +313,11 @@ def generate_neighbor(
         new_u = fdc_swap_move(u, instance, i, j_from, j_to, t, delta)
         move_key = ('fdc_swap', t, i, j_from, j_to)
     
-    else:
+    elif r < (
+        move_probs.get('magnitude_tweak', 0.30)
+        + move_probs.get('fdc_swap', 0.25)
+        + move_probs.get('time_shift', 0.25)
+    ):
         # Time shift
         t_from = random.randrange(T)
         t_to = random.randrange(T)
@@ -219,6 +329,25 @@ def generate_neighbor(
         
         new_u = time_shift_move(u, instance, i, j, t_from, t_to, delta)
         move_key = ('time_shift', i, j, t_from, t_to)
+    elif r < (
+        move_probs.get('magnitude_tweak', 0.30)
+        + move_probs.get('fdc_swap', 0.25)
+        + move_probs.get('time_shift', 0.25)
+        + move_probs.get('product_rebalance', 0.10)
+    ):
+        # Product rebalance (large move)
+        i = random.randrange(N)
+        new_u = product_rebalance_move(u, instance, i)
+        move_key = ('product_rebalance', i)
+    else:
+        # Block replan (large move)
+        i = random.randrange(N)
+        # Window length between 2 and 4 periods
+        window = random.randint(2, min(4, T))
+        t_start = random.randrange(0, max(1, T - window + 1))
+        t_end = t_start + window - 1
+        new_u = block_replan_move(u, instance, i, t_start, t_end)
+        move_key = ('block_replan', i, t_start, t_end)
     
     return new_u, move_key
 
@@ -275,9 +404,11 @@ def generate_problem_aware_neighbor(
     
     if move_probs is None:
         move_probs = {
-            'time_shift': 0.33,
-            'fdc_swap': 0.33,
-            'magnitude_tweak': 0.34
+            'time_shift': 0.25,
+            'fdc_swap': 0.25,
+            'magnitude_tweak': 0.30,
+            'product_rebalance': 0.10,
+            'block_replan': 0.10,
         }
     
     # Compute adaptive deltas if not provided
@@ -317,7 +448,7 @@ def generate_problem_aware_neighbor(
     
     # Select move type
     r = random.random()
-    if r < move_probs.get('magnitude_tweak', 0.34):
+    if r < move_probs.get('magnitude_tweak', 0.30):
         # Magnitude tweak - select (i, j) based on weights, random period
         t = random.randrange(T)
         # Flatten weights for selection
@@ -336,7 +467,7 @@ def generate_problem_aware_neighbor(
         new_u = magnitude_tweak(u, instance, i, j, t, delta)
         move_key = ('magnitude_tweak', t, i, j)
     
-    elif r < move_probs.get('magnitude_tweak', 0.34) + move_probs.get('fdc_swap', 0.33):
+    elif r < move_probs.get('magnitude_tweak', 0.30) + move_probs.get('fdc_swap', 0.25):
         # FDC swap - select (i, t) based on weights, swap to lower-cost FDC
         t = random.randrange(T)
         # Select product based on average weights across FDCs
@@ -360,7 +491,11 @@ def generate_problem_aware_neighbor(
         new_u = fdc_swap_move(u, instance, i, j_from, j_to, t, delta)
         move_key = ('fdc_swap', t, i, j_from, j_to)
     
-    else:
+    elif r < (
+        move_probs.get('magnitude_tweak', 0.30)
+        + move_probs.get('fdc_swap', 0.25)
+        + move_probs.get('time_shift', 0.25)
+    ):
         # Time shift - select (i, j) based on weights, shift to earlier period if high demand
         # Select (i, j) based on weights
         flat_weights = combined_weights.flatten()
@@ -391,6 +526,27 @@ def generate_problem_aware_neighbor(
         delta = random.choice(delta_choices)
         new_u = time_shift_move(u, instance, i, j, t_from, t_to, delta)
         move_key = ('time_shift', i, j, t_from, t_to)
+    elif r < (
+        move_probs.get('magnitude_tweak', 0.30)
+        + move_probs.get('fdc_swap', 0.25)
+        + move_probs.get('time_shift', 0.25)
+        + move_probs.get('product_rebalance', 0.10)
+    ):
+        # Product rebalance focused on high-weight product
+        product_weights = np.mean(combined_weights, axis=1)  # shape (N,)
+        i = _select_weighted_index(product_weights)
+        new_u = product_rebalance_move(u, instance, i)
+        move_key = ('product_rebalance', i)
+    else:
+        # Block replan focused on high-weight product
+        product_weights = np.mean(combined_weights, axis=1)  # shape (N,)
+        i = _select_weighted_index(product_weights)
+        window = max(2, min(4, T))
+        t_start = _select_weighted_index(np.arange(1, T + 1, dtype=float))
+        t_start = min(t_start, T - 1)
+        t_end = min(T - 1, t_start + window - 1)
+        new_u = block_replan_move(u, instance, i, t_start, t_end)
+        move_key = ('block_replan', i, t_start, t_end)
     
     return new_u, move_key
 

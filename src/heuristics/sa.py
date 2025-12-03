@@ -9,6 +9,11 @@ from ..model.instance import Instance
 from ..model.simulator import simulate
 from .utils import copy_u, evaluate_u, evaluate_u_incremental
 from .neighborhoods import generate_neighbor
+from .neighborhoods import (
+    generate_problem_aware_neighbor,
+    product_rebalance_move,
+    block_replan_move,
+)
 
 
 def simulated_annealing(
@@ -17,11 +22,11 @@ def simulated_annealing(
     T0: Optional[float] = None,
     alpha: float = 0.95,
     max_iters: int = 500,
-    neighbors_per_iter: int = 1,
     acceptance_rate: float = 0.9,
     max_no_improve: Optional[int] = 100,
     verbose: bool = False,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    large_move_prob: float = 0.0
 ) -> Tuple[float, np.ndarray, List[float]]:
     """
     Simulated Annealing over shipment plans.
@@ -92,12 +97,27 @@ def simulated_annealing(
     no_improve_count = 0
     
     for k in range(max_iters):
-        # Generate neighbor (with problem-aware moves)
-        candidate_u, _ = generate_neighbor(
-            instance, current_u,
-            problem_aware_prob=0.3,
-            simulation_result=cached_result
-        )
+        # Occasionally apply a large move to escape local basins
+        use_large_move = large_move_prob > 0.0 and random.random() < large_move_prob
+        if use_large_move:
+            # Large move via product rebalance or block replan, guided by simulation
+            T = instance.T
+            N = instance.num_products
+            i = random.randrange(N)
+            if random.random() < 0.5:
+                candidate_u = product_rebalance_move(current_u, instance, i)
+            else:
+                window = random.randint(2, min(4, T))
+                t_start = random.randrange(0, max(1, T - window + 1))
+                t_end = t_start + window - 1
+                candidate_u = block_replan_move(current_u, instance, i, t_start, t_end)
+        else:
+            # Generate neighbor (with problem-aware moves)
+            candidate_u, _ = generate_neighbor(
+                instance, current_u,
+                problem_aware_prob=0.3,
+                simulation_result=cached_result
+            )
         # Use incremental evaluation for faster neighbor evaluation
         candidate_cost, _, candidate_result = evaluate_u_incremental(
             instance, candidate_u, current_u, cached_result
