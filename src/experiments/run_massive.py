@@ -63,14 +63,19 @@ def main() -> None:
         sa_params={
             'T0': 200000.0,
             'alpha': 0.95,
-            'max_iters': 500
+            'max_iters': 500,
+            # Hard cap of 2 minutes per instance for SA (may stop earlier on non-improvement)
+            'time_limit': 120.0,
         },
         tabu_params={
             'tabu_tenure': 10,
             'max_iters': 300,
-            'neighborhood_size': 40
+            'neighborhood_size': 40,
+            # Hard cap of 2 minutes per instance for Tabu (may stop earlier on non-improvement)
+            'time_limit': 120.0,
         },
-        mip_max_time=900.0,  # up to 15 minutes for MIP on massive instance
+        # Hard cap of 2 minutes per instance for the exact MIP solver
+        mip_max_time=120.0,
         baseline_names=args.baselines or ['random'],
     )
 

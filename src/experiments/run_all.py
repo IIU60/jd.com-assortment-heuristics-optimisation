@@ -214,7 +214,7 @@ def run_all_experiments(
             'max_iters': 500,
             'max_no_improve': 200,
             'large_move_prob': 0.1,
-            # time_limit: optional override (seconds) per instance for SA
+            'time_limit': None, # optional override (seconds) per instance for SA
         }  # Single-start SA with occasional large moves
     if tabu_params is None:
         tabu_params = {
@@ -223,7 +223,7 @@ def run_all_experiments(
             'neighborhood_size': 8,
             'max_no_improve': 100,
             'large_move_prob': 0.1,
-            # time_limit: optional override (seconds) per instance for Tabu
+            'time_limit': None # optional override (seconds) per instance for Tabu
         }  # Single-start Tabu with occasional large moves
     
     # Load instances
