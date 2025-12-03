@@ -58,8 +58,22 @@ def main() -> None:
     run_all_experiments(
         instances_dir=str(instances_dir),
         output_dir=str(results_dir),
-        sa_params={'T0': 50000.0, 'alpha': 0.95, 'max_iters': 300},
-        tabu_params={'tabu_tenure': 5, 'max_iters': 150, 'neighborhood_size': 20},
+        sa_params={
+            'T0': 50000.0,
+            'alpha': 0.95,
+            'max_iters': 300,
+            # Hard cap of 2 minutes per instance for SA (may stop earlier on non-improvement)
+            'time_limit': 120.0,
+        },
+        tabu_params={
+            'tabu_tenure': 5,
+            'max_iters': 150,
+            'neighborhood_size': 20,
+            # Hard cap of 2 minutes per instance for Tabu (may stop earlier on non-improvement)
+            'time_limit': 120.0,
+        },
+        # Hard cap of 2 minutes per instance for the exact MIP solver
+        mip_max_time=120.0,
         baseline_names=args.baselines or ['random'],
     )
 
