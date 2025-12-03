@@ -7,7 +7,7 @@ from typing import Tuple, List, Optional
 
 from ..model.instance import Instance
 from ..model.simulator import simulate
-from .utils import copy_u, evaluate_u
+from .utils import copy_u, evaluate_u, evaluate_u_incremental
 from .neighborhoods import generate_neighbor
 
 
@@ -64,7 +64,10 @@ def simulated_annealing(
         
         for _ in range(warmup_samples):
             candidate_u, _ = generate_neighbor(instance, current_u)
-            candidate_cost, _ = evaluate_u(instance, candidate_u)
+            # Use incremental evaluation for faster warmup
+            candidate_cost, _, _ = evaluate_u_incremental(
+                instance, candidate_u, current_u, cached_result
+            )
             delta = candidate_cost - current_cost
             if delta > 0:  # Only consider non-improving moves
                 deltas.append(delta)
@@ -95,7 +98,10 @@ def simulated_annealing(
             problem_aware_prob=0.3,
             simulation_result=cached_result
         )
-        candidate_cost, _ = evaluate_u(instance, candidate_u)
+        # Use incremental evaluation for faster neighbor evaluation
+        candidate_cost, _, candidate_result = evaluate_u_incremental(
+            instance, candidate_u, current_u, cached_result
+        )
         
         delta = candidate_cost - current_cost
         
@@ -103,8 +109,8 @@ def simulated_annealing(
         if delta <= 0 or random.random() < math.exp(-delta / max(T, 1e-9)):
             current_u = candidate_u
             current_cost = candidate_cost
-            # Update cached result for next iteration
-            cached_result = simulate(instance, current_u, check_feasibility=False)
+            # Update cached result for next iteration (already computed by incremental evaluation)
+            cached_result = candidate_result
             
             if current_cost < best_cost:
                 best_cost = current_cost
