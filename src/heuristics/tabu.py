@@ -5,7 +5,8 @@ import random
 from typing import Tuple, List, Dict, Optional
 
 from ..model.instance import Instance
-from .utils import copy_u, evaluate_u
+from ..model.result import SimulationResult
+from .utils import copy_u, evaluate_u, evaluate_u_incremental
 from .neighborhoods import generate_neighbor
 
 
@@ -44,6 +45,10 @@ def tabu_search(
     
     current_u = copy_u(u_init)
     current_cost, _ = evaluate_u(instance, current_u)
+    # Cache the full simulation result for incremental evaluation
+    from ..model.simulator import simulate
+    cached_result = simulate(instance, current_u, check_feasibility=False)
+    
     best_u = copy_u(current_u)
     best_cost = current_cost
     
@@ -56,8 +61,9 @@ def tabu_search(
         candidates = []
         for _ in range(neighborhood_size):
             new_u, move_key = generate_neighbor(instance, current_u)
-            cost, _ = evaluate_u(instance, new_u)
-            candidates.append((cost, new_u, move_key))
+            # Use incremental evaluation
+            cost, _, new_result = evaluate_u_incremental(instance, new_u, current_u, cached_result)
+            candidates.append((cost, new_u, move_key, new_result))
         
         # Update tabu tenures
         to_delete = []
@@ -72,24 +78,25 @@ def tabu_search(
         candidates.sort(key=lambda x: x[0])
         
         # Choose best non-tabu candidate (or best if all tabu and doesn't improve)
-        chosen_cost, chosen_u, chosen_key = None, None, None
+        chosen_cost, chosen_u, chosen_key, chosen_result = None, None, None, None
         
-        for cost, u_cand, key in candidates:
+        for cost, u_cand, key, result in candidates:
             # Aspiration criterion: allow tabu if improves global best
             if key in tabu_list and cost >= best_cost:
                 # Tabu and doesn't improve: skip
                 continue
             
-            chosen_cost, chosen_u, chosen_key = cost, u_cand, key
+            chosen_cost, chosen_u, chosen_key, chosen_result = cost, u_cand, key, result
             break
         
         # If all candidates are tabu, take the best one anyway
         if chosen_u is None:
-            chosen_cost, chosen_u, chosen_key = candidates[0]
+            chosen_cost, chosen_u, chosen_key, chosen_result = candidates[0]
         
-        # Update current solution
+        # Update current solution and cache
         current_u = chosen_u
         current_cost = chosen_cost
+        cached_result = chosen_result
         
         # Update best
         if current_cost < best_cost:
