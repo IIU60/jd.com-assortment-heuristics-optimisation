@@ -1,7 +1,7 @@
 """
-Utility script to print numerical results for *medium* and *massive*
-experiments in a compact table format, similar to the example in the
-project report.
+Utility script to print numerical results for *small*, *medium*, *large*,
+and *massive* experiments in a compact table format, similar to the
+example in the project report.
 
 It scans the top-level ``experiments/`` directory, finds the most recent
 experiment folder for each size class (by modification time), loads the
@@ -19,7 +19,9 @@ Optional flags allow you to override the automatically selected
 experiment folders:
 
     python -m src.experiments.print_numerical_results \\
+        --small small_5fdc_20sku_T14_20251203-121639 \\
         --medium medium_20fdc_100sku_T14_20251203-121701 \\
+        --large large_80fdc_320sku_T14_20251203-121837 \\
         --massive massive_100fdc_1000sku_T14_20251203-122454
 """
 
@@ -211,9 +213,18 @@ def print_table(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Print numerical results for medium and massive experiments "
-            "from experiments/<name>/results/all_results.csv."
+            "Print numerical results for small, medium, large, and massive "
+            "experiments from experiments/<name>/results/all_results.csv."
         )
+    )
+    parser.add_argument(
+        "--small",
+        type=str,
+        default=None,
+        help=(
+            "Name of the small experiment directory under experiments/. "
+            "If omitted, the latest 'small_*' experiment with a summary is used."
+        ),
     )
     parser.add_argument(
         "--medium",
@@ -222,6 +233,15 @@ def main() -> None:
         help=(
             "Name of the medium experiment directory under experiments/. "
             "If omitted, the latest 'medium_*' experiment with a summary is used."
+        ),
+    )
+    parser.add_argument(
+        "--large",
+        type=str,
+        default=None,
+        help=(
+            "Name of the large experiment directory under experiments/. "
+            "If omitted, the latest 'large_*' experiment with a summary is used."
         ),
     )
     parser.add_argument(
@@ -236,7 +256,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    for size_label, override in (("medium", args.medium), ("massive", args.massive)):
+    for size_label, override in (
+        ("small", args.small),
+        ("medium", args.medium),
+        ("large", args.large),
+        ("massive", args.massive),
+    ):
         exp_dir = find_experiment_dir(size_label=size_label, override_name=override)
         if exp_dir is None:
             print(f"\nNo {size_label} experiment with '{SUMMARY_FILENAME}' found.")
