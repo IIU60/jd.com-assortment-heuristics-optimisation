@@ -38,6 +38,7 @@ def run_baselines_on_instance(instance: Instance, seed: int = 42) -> Dict[str, D
         'cost_transfer': result.cost_transfer,
         'cost_cross': result.cost_cross,
         'cost_lost': result.cost_lost,
+        'cost_clipped': result.cost_clipped,
         'clipped_shipments': result.clipped_shipments
     }
     
@@ -53,6 +54,7 @@ def run_baselines_on_instance(instance: Instance, seed: int = 42) -> Dict[str, D
         'cost_transfer': result.cost_transfer,
         'cost_cross': result.cost_cross,
         'cost_lost': result.cost_lost,
+        'cost_clipped': result.cost_clipped,
         'clipped_shipments': result.clipped_shipments
     }
     
@@ -126,6 +128,7 @@ def run_all_algorithms_on_instance(
                 'cost_transfer': float(result.cost_transfer),
                 'cost_cross': float(result.cost_cross),
                 'cost_lost': float(result.cost_lost),
+                'cost_clipped': float(result.cost_clipped),
                 'clipped_shipments': float(result.clipped_shipments),
                 'seed': seed
             }
@@ -203,9 +206,9 @@ def run_all_experiments(
     from .plots import create_all_plots
     import pandas as pd
     
-    # Baselines to include (default: only random, to keep runtime modest)
+    # Baselines to include (default: myopic and random)
     if baseline_names is None:
-        baseline_names = ['random']
+        baseline_names = ['myopic', 'random']
     baseline_set = set(baseline_names)
 
     if sa_params is None:
@@ -261,8 +264,8 @@ def run_all_experiments(
         
         # Prepare algorithm dictionary (single-start heuristics)
         def sa_wrapper(inst):
-            # Single strong construction as start (GRASP)
-            u0 = grasp_constructor(inst, alpha=0.5, seed=42)
+            # Start from myopic baseline
+            _, u0 = myopic_greedy(inst)
             cost, u_sa, _ = simulated_annealing(
                 inst,
                 u0,
@@ -277,8 +280,8 @@ def run_all_experiments(
             return cost, u_sa
         
         def tabu_wrapper(inst):
-            # Single strong construction as start (GRASP)
-            u0 = grasp_constructor(inst, alpha=0.5, seed=43)
+            # Start from myopic baseline
+            _, u0 = myopic_greedy(inst)
             cost, u_tabu, _ = tabu_search(
                 inst,
                 u0,
@@ -357,7 +360,9 @@ def run_all_experiments(
                     'runtime': alg_results.get('runtime', None),
                     'cost_transfer': alg_results.get('cost_transfer', None),
                     'cost_cross': alg_results.get('cost_cross', None),
-                    'cost_lost': alg_results.get('cost_lost', None)
+                    'cost_lost': alg_results.get('cost_lost', None),
+                    'cost_clipped': alg_results.get('cost_clipped', None),
+                    'clipped_shipments': alg_results.get('clipped_shipments', None)
                 })
     
     # Create summary DataFrame

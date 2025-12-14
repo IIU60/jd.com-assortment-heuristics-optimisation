@@ -26,6 +26,8 @@ def tabu_search(
     seed: Optional[int] = None,
     large_move_prob: float = 0.0,
     time_limit: Optional[float] = None,
+    problem_aware_prob: float = 0.8,
+    tabu_acceptance_threshold: float = 0.01,
 ) -> Tuple[float, np.ndarray, List[float]]:
     """
     Tabu Search over shipment plans (single-start, time-limited).
@@ -33,6 +35,14 @@ def tabu_search(
     Uses a sampled neighborhood and a simple tabu list on move keys.
     Stops when either `time_limit` (if provided) or `max_iters` / `max_no_improve`
     are reached.
+    
+    Args:
+        problem_aware_prob: Probability of using problem-aware neighbor generation
+            (default: 0.8). Higher values favor moves targeting high-cost/high-demand
+            areas; lower values favor random exploration.
+        tabu_acceptance_threshold: Maximum relative cost increase allowed for tabu moves
+            (default: 0.01 = 1%). Tabu moves that don't improve are only accepted if
+            within this threshold of the best cost.
     """
     if seed is not None:
         random.seed(seed)
@@ -85,7 +95,7 @@ def tabu_search(
                 new_u, move_key = generate_neighbor(
                     instance,
                     current_u,
-                    problem_aware_prob=0.3,
+                    problem_aware_prob=problem_aware_prob,
                     simulation_result=cached_result,
                 )
             # Use incremental evaluation
@@ -121,9 +131,18 @@ def tabu_search(
             chosen_cost, chosen_u, chosen_key, chosen_result = cost, u_cand, key, result
             break
         
-        # If all candidates are tabu, take the best one anyway
+        # If all candidates are tabu, only accept if within threshold
         if chosen_u is None:
-            chosen_cost, chosen_u, chosen_key, chosen_result = candidates[0]
+            best_candidate = candidates[0]
+            candidate_cost = best_candidate[0]
+            # Only accept if it improves or is within threshold
+            if candidate_cost < best_cost * (1.0 + tabu_acceptance_threshold):
+                chosen_cost, chosen_u, chosen_key, chosen_result = best_candidate
+            else:
+                # Reject: keep current solution (no move)
+                no_improve_count += 1
+                cost_log.append(best_cost)
+                continue
         
         # Update current solution and cache
         current_u = chosen_u

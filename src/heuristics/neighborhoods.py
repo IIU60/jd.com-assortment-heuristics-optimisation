@@ -6,7 +6,7 @@ from typing import Tuple, Dict, Optional
 
 from ..model.instance import Instance
 from ..model.result import SimulationResult
-from .utils import copy_u, clamp_u_to_feasibility
+from .utils import copy_u, clamp_u_to_feasibility, get_feasible_delta, compute_available_capacity
 
 
 def time_shift_move(
@@ -111,6 +111,164 @@ def magnitude_tweak(
     
     # Apply delta
     new_u[t, i, j] = max(0.0, new_u[t, i, j] + delta)
+    
+    # Clamp to feasibility
+    new_u = clamp_u_to_feasibility(instance, new_u)
+    
+    return new_u
+
+
+def magnitude_tweak_feasible(
+    u: np.ndarray,
+    instance: Instance,
+    i: int,
+    j: int,
+    t: int,
+    delta: float,
+    cached_result: Optional[SimulationResult] = None
+) -> np.ndarray:
+    """
+    Constraint-aware magnitude tweak: add or subtract delta from shipment.
+    
+    Checks constraints before applying delta to minimize clipping.
+    
+    Args:
+        u: Current shipment plan, shape (T, N, J)
+        instance: Problem instance
+        i: Product index
+        j: FDC index
+        t: Period
+        delta: Desired amount to add (can be negative to subtract)
+        cached_result: Optional cached simulation result for constraint checking
+    
+    Returns:
+        New shipment plan (copy)
+    """
+    new_u = copy_u(u)
+    
+    # Get feasible delta
+    feasible_delta = get_feasible_delta(instance, u, cached_result, i, j, t, delta)
+    
+    # Apply feasible delta
+    new_u[t, i, j] = max(0.0, new_u[t, i, j] + feasible_delta)
+    
+    # Clamp to feasibility (should be minimal now)
+    new_u = clamp_u_to_feasibility(instance, new_u)
+    
+    return new_u
+
+
+def fdc_swap_move_feasible(
+    u: np.ndarray,
+    instance: Instance,
+    i: int,
+    j_from: int,
+    j_to: int,
+    t: int,
+    delta: float,
+    cached_result: Optional[SimulationResult] = None
+) -> np.ndarray:
+    """
+    Constraint-aware FDC-swap move: reduce shipment to j_from, increase to j_to.
+    
+    Checks constraints at both source and destination.
+    
+    Args:
+        u: Current shipment plan, shape (T, N, J)
+        instance: Problem instance
+        i: Product index
+        j_from: FDC to reduce shipment
+        j_to: FDC to increase shipment
+        t: Period
+        delta: Desired amount to swap
+        cached_result: Optional cached simulation result for constraint checking
+    
+    Returns:
+        New shipment plan (copy)
+    """
+    new_u = copy_u(u)
+    
+    # Can always reduce from j_from (up to current value)
+    max_reduce = min(delta, u[t, i, j_from])
+    
+    # Check capacity at j_to for increase
+    if cached_result is not None:
+        rdc_avail, fdc_slack, outbound_remaining = compute_available_capacity(instance, cached_result, t)
+        avail_rdc = rdc_avail[i]
+        avail_fdc_to = fdc_slack[j_to]
+        avail_outbound = outbound_remaining
+        
+        # Maximum feasible increase at j_to
+        max_increase = min(avail_rdc, avail_fdc_to, avail_outbound)
+        
+        # Actual swap amount is min of what we can reduce and what we can increase
+        feasible_delta = min(max_reduce, max_increase)
+    else:
+        # Conservative estimate
+        feasible_delta = min(max_reduce, instance.outbound_capacity[t] * 0.1)
+    
+    # Apply swap
+    new_u[t, i, j_from] = max(0.0, new_u[t, i, j_from] - feasible_delta)
+    new_u[t, i, j_to] += feasible_delta
+    
+    # Clamp to feasibility
+    new_u = clamp_u_to_feasibility(instance, new_u)
+    
+    return new_u
+
+
+def time_shift_move_feasible(
+    u: np.ndarray,
+    instance: Instance,
+    i: int,
+    j: int,
+    t_from: int,
+    t_to: int,
+    delta: float,
+    cached_result: Optional[SimulationResult] = None
+) -> np.ndarray:
+    """
+    Constraint-aware time-shift move: reduce shipment at t_from, increase at t_to.
+    
+    Checks constraints at both periods.
+    
+    Args:
+        u: Current shipment plan, shape (T, N, J)
+        instance: Problem instance
+        i: Product index
+        j: FDC index
+        t_from: Period to reduce shipment
+        t_to: Period to increase shipment
+        delta: Desired amount to shift
+        cached_result: Optional cached simulation result for constraint checking
+    
+    Returns:
+        New shipment plan (copy)
+    """
+    new_u = copy_u(u)
+    
+    # Can always reduce from t_from (up to current value)
+    max_reduce = min(delta, u[t_from, i, j])
+    
+    # Check capacity at t_to for increase
+    if cached_result is not None:
+        rdc_avail, fdc_slack, outbound_remaining = compute_available_capacity(instance, cached_result, t_to)
+        avail_rdc = rdc_avail[i]
+        avail_fdc = fdc_slack[j]
+        avail_outbound = outbound_remaining
+        
+        # Maximum feasible increase at t_to
+        max_increase = min(avail_rdc, avail_fdc, avail_outbound)
+        
+        # Actual shift amount is min of what we can reduce and what we can increase
+        feasible_delta = min(max_reduce, max_increase)
+    else:
+        # Conservative estimate
+        feasible_delta = min(max_reduce, instance.outbound_capacity[t_to] * 0.1)
+    
+    # Apply shift
+    new_u[t_from, i, j] = max(0.0, new_u[t_from, i, j] - feasible_delta)
+    new_u[t_to, i, j] += feasible_delta
     
     # Clamp to feasibility
     new_u = clamp_u_to_feasibility(instance, new_u)
@@ -227,7 +385,7 @@ def generate_neighbor(
     u: np.ndarray,
     move_probs: Optional[Dict[str, float]] = None,
     delta_choices: Optional[Tuple[float, ...]] = None,
-    problem_aware_prob: float = 0.3,
+    problem_aware_prob: float = 0.8,
     simulation_result: Optional[SimulationResult] = None
 ) -> Tuple[np.ndarray, Tuple[str, ...]]:
     """
@@ -241,7 +399,7 @@ def generate_neighbor(
             If None, uses equal probabilities
         delta_choices: Possible delta values for moves
             If None, computes adaptive deltas based on problem scale
-        problem_aware_prob: Probability of using problem-aware move (default: 0.3)
+        problem_aware_prob: Probability of using problem-aware move (default: 0.8)
             Remaining probability uses random move
         simulation_result: Optional simulation result for problem-aware moves
             If None, problem-aware moves use only instance data (cost, demand)
@@ -289,7 +447,7 @@ def generate_neighbor(
     # Select move type
     r = random.random()
     if r < move_probs.get('magnitude_tweak', 0.30):
-        # Magnitude tweak
+        # Magnitude tweak (constraint-aware)
         t = random.randrange(T)
         i = random.randrange(N)
         j = random.randrange(J)
@@ -297,11 +455,11 @@ def generate_neighbor(
         if random.random() < 0.5:
             delta = -delta
         
-        new_u = magnitude_tweak(u, instance, i, j, t, delta)
+        new_u = magnitude_tweak_feasible(u, instance, i, j, t, delta, simulation_result)
         move_key = ('magnitude_tweak', t, i, j)
     
     elif r < move_probs.get('magnitude_tweak', 0.30) + move_probs.get('fdc_swap', 0.25):
-        # FDC swap
+        # FDC swap (constraint-aware)
         t = random.randrange(T)
         i = random.randrange(N)
         j_from = random.randrange(J)
@@ -310,7 +468,7 @@ def generate_neighbor(
             j_to = random.randrange(J)
         delta = random.choice(delta_choices)
         
-        new_u = fdc_swap_move(u, instance, i, j_from, j_to, t, delta)
+        new_u = fdc_swap_move_feasible(u, instance, i, j_from, j_to, t, delta, simulation_result)
         move_key = ('fdc_swap', t, i, j_from, j_to)
     
     elif r < (
@@ -318,7 +476,7 @@ def generate_neighbor(
         + move_probs.get('fdc_swap', 0.25)
         + move_probs.get('time_shift', 0.25)
     ):
-        # Time shift
+        # Time shift (constraint-aware)
         t_from = random.randrange(T)
         t_to = random.randrange(T)
         while t_to == t_from:
@@ -327,7 +485,7 @@ def generate_neighbor(
         j = random.randrange(J)
         delta = random.choice(delta_choices)
         
-        new_u = time_shift_move(u, instance, i, j, t_from, t_to, delta)
+        new_u = time_shift_move_feasible(u, instance, i, j, t_from, t_to, delta, simulation_result)
         move_key = ('time_shift', i, j, t_from, t_to)
     elif r < (
         move_probs.get('magnitude_tweak', 0.30)
@@ -371,6 +529,53 @@ def _select_weighted_index(weights: np.ndarray) -> int:
     
     # Sample
     return np.random.choice(len(weights), p=probs)
+
+
+def compute_capacity_slack(
+    instance: Instance,
+    cached_result: Optional[SimulationResult]
+) -> np.ndarray:
+    """
+    Compute capacity slack weights, shape (N, J).
+    
+    Higher slack = more likely to be selected for moves.
+    Combines RDC inventory availability, FDC capacity slack, and outbound capacity.
+    
+    Args:
+        instance: Problem instance
+        cached_result: Optional simulation result
+    
+    Returns:
+        Capacity slack weights, shape (N, J)
+    """
+    N = instance.num_products
+    J = instance.num_fdcs
+    T = instance.T
+    
+    if cached_result is None:
+        # No simulation result: return uniform weights
+        return np.ones((N, J), dtype=float)
+    
+    # Average capacity slack across all periods
+    slack_weights = np.zeros((N, J), dtype=float)
+    
+    for t in range(T):
+        rdc_avail, fdc_slack, outbound_remaining = compute_available_capacity(instance, cached_result, t)
+        
+        # For each (i, j), compute available capacity
+        for i in range(N):
+            for j in range(J):
+                # Available is min of RDC inventory, FDC capacity, outbound capacity
+                avail = min(rdc_avail[i], fdc_slack[j], outbound_remaining)
+                slack_weights[i, j] += max(0.0, avail)
+    
+    # Average across periods
+    slack_weights /= T
+    
+    # Normalize to make all positive
+    slack_weights = slack_weights - np.min(slack_weights) + 1.0
+    
+    return slack_weights
 
 
 def generate_problem_aware_neighbor(
@@ -443,13 +648,18 @@ def generate_problem_aware_neighbor(
         service_weights = lost_sales + cross_fulfill * 0.5
         service_weights = service_weights - np.min(service_weights) + 1.0
     
+    # 4. Capacity slack weights (constraint-aware)
+    capacity_slack_weights = compute_capacity_slack(instance, simulation_result)
+    
     # Combine weights (weighted average)
-    combined_weights = 0.4 * transfer_weights + 0.4 * demand_weights + 0.2 * service_weights
+    # Prefer high-demand areas WITH available capacity
+    combined_weights = (0.3 * transfer_weights + 0.3 * demand_weights + 
+                        0.2 * service_weights + 0.2 * capacity_slack_weights)
     
     # Select move type
     r = random.random()
     if r < move_probs.get('magnitude_tweak', 0.30):
-        # Magnitude tweak - select (i, j) based on weights, random period
+        # Magnitude tweak - select (i, j) based on weights, random period (constraint-aware)
         t = random.randrange(T)
         # Flatten weights for selection
         flat_weights = combined_weights.flatten()
@@ -464,31 +674,38 @@ def generate_problem_aware_neighbor(
         else:
             delta = -abs(delta)
         
-        new_u = magnitude_tweak(u, instance, i, j, t, delta)
+        new_u = magnitude_tweak_feasible(u, instance, i, j, t, delta, simulation_result)
         move_key = ('magnitude_tweak', t, i, j)
     
     elif r < move_probs.get('magnitude_tweak', 0.30) + move_probs.get('fdc_swap', 0.25):
-        # FDC swap - select (i, t) based on weights, swap to lower-cost FDC
+        # FDC swap - select (i, t) based on weights, swap to lower-cost FDC (constraint-aware)
         t = random.randrange(T)
         # Select product based on average weights across FDCs
         product_weights = np.mean(combined_weights, axis=1)  # shape (N,)
         i = _select_weighted_index(product_weights)
         
-        # Select j_from (high cost/demand) and j_to (lower cost, prefer high demand)
+        # Select j_from (high cost/demand) and j_to (lower cost, prefer high demand + capacity)
         j_from_weights = combined_weights[i, :]
         j_from = _select_weighted_index(j_from_weights)
         
-        # For j_to, prefer FDCs with lower transfer cost but still high demand
+        # For j_to, prefer FDCs with lower transfer cost, high demand, AND available capacity
         cost_weights = 1.0 / (instance.transfer_cost[i, :] + 1.0)  # Inverse cost
         demand_weights_j = instance.demand_fdc[:, i, :].mean(axis=0)  # Average demand for this product
-        j_to_weights = cost_weights * (demand_weights_j + 1.0)
+        # Include capacity slack in selection
+        if simulation_result is not None:
+            rdc_avail, fdc_slack, outbound_remaining = compute_available_capacity(instance, simulation_result, t)
+            capacity_weights_j = np.minimum(rdc_avail[i], fdc_slack)  # Available at each FDC
+            capacity_weights_j = capacity_weights_j / (np.max(capacity_weights_j) + 1e-9)  # Normalize
+        else:
+            capacity_weights_j = np.ones(J)
+        j_to_weights = cost_weights * (demand_weights_j + 1.0) * (capacity_weights_j + 1.0)
         j_to = _select_weighted_index(j_to_weights)
         
         while j_to == j_from:
             j_to = _select_weighted_index(j_to_weights)
         
         delta = random.choice(delta_choices)
-        new_u = fdc_swap_move(u, instance, i, j_from, j_to, t, delta)
+        new_u = fdc_swap_move_feasible(u, instance, i, j_from, j_to, t, delta, simulation_result)
         move_key = ('fdc_swap', t, i, j_from, j_to)
     
     elif r < (
@@ -524,7 +741,7 @@ def generate_problem_aware_neighbor(
                 t_to = random.randrange(T - 1)
         
         delta = random.choice(delta_choices)
-        new_u = time_shift_move(u, instance, i, j, t_from, t_to, delta)
+        new_u = time_shift_move_feasible(u, instance, i, j, t_from, t_to, delta, simulation_result)
         move_key = ('time_shift', i, j, t_from, t_to)
     elif r < (
         move_probs.get('magnitude_tweak', 0.30)

@@ -60,6 +60,8 @@ def simulate(instance: Instance,
     lost_rdc = np.zeros((T, N), dtype=float)
     
     total_clipped = 0.0
+    clipped_per_period = np.zeros(T, dtype=float)
+    cost_clipped = 0.0
     
     for t in range(T):
         # 1) Replenishment at RDC (arrives at start of period t)
@@ -94,7 +96,11 @@ def simulate(instance: Instance,
                 feasible_ship = min(request, avail_rdc, cap_left_fdc, cap_left_outbound)
                 
                 if feasible_ship < request:
-                    total_clipped += (request - feasible_ship)
+                    clipped_amount = request - feasible_ship
+                    total_clipped += clipped_amount
+                    clipped_per_period[t] += clipped_amount
+                    # Cost penalty: proportional to transfer cost of clipped amount
+                    cost_clipped += instance.transfer_cost[i, j] * clipped_amount
                 
                 actual_shipments[t, i, j] = feasible_ship
                 inventory_rdc[t, i] -= feasible_ship
@@ -164,7 +170,8 @@ def simulate(instance: Instance,
         np.sum(lost_fdc) + np.sum(lost_rdc)
     )
     
-    total_cost = cost_transfer + cost_cross + cost_lost
+    # Total cost includes clipping penalty
+    total_cost = cost_transfer + cost_cross + cost_lost + cost_clipped
     
     # Feasibility checks
     if check_feasibility:
@@ -197,6 +204,7 @@ def simulate(instance: Instance,
         cost_transfer=cost_transfer,
         cost_cross=cost_cross,
         cost_lost=cost_lost,
+        cost_clipped=cost_clipped,
         inventory_rdc=inventory_rdc,
         inventory_fdc=inventory_fdc,
         shipments=actual_shipments,
@@ -205,6 +213,7 @@ def simulate(instance: Instance,
         lost_fdc=lost_fdc,
         rdc_fulfilled=rdc_fulfilled,
         lost_rdc=lost_rdc,
-        clipped_shipments=total_clipped
+        clipped_shipments=total_clipped,
+        clipped_per_period=clipped_per_period
     )
 

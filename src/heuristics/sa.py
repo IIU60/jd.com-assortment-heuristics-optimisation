@@ -78,6 +78,7 @@ def simulated_annealing(
     seed: Optional[int] = None,
     large_move_prob: float = 0.0,
     time_limit: Optional[float] = None,
+    problem_aware_prob: float = 0.8,
 ) -> Tuple[float, np.ndarray, List[float]]:
     """
     Simulated Annealing over shipment plans (single-start, time-limited).
@@ -87,6 +88,11 @@ def simulated_annealing(
     - Otherwise falls back to a simple fraction of the initial cost
     - Stops when either `time_limit` (if provided) or `max_iters` / `max_no_improve`
       are reached.
+    
+    Args:
+        problem_aware_prob: Probability of using problem-aware neighbor generation
+            (default: 0.8). Higher values favor moves targeting high-cost/high-demand
+            areas; lower values favor random exploration.
     """
     if seed is not None:
         random.seed(seed)
@@ -150,7 +156,7 @@ def simulated_annealing(
             candidate_u, _ = generate_neighbor(
                 instance,
                 current_u,
-                problem_aware_prob=0.3,
+                problem_aware_prob=problem_aware_prob,
                 simulation_result=cached_result,
             )
         # Use incremental evaluation for faster neighbor evaluation

@@ -30,11 +30,15 @@ class SimulationResult:
         lost_rdc: Lost sales at RDC, shape (T, N)
         
         clipped_shipments: Total amount of shipments that were clipped due to constraints
+        clipped_per_period: Clipped shipments per period, shape (T,)
+            clipped_per_period[t] = total clipped in period t
+        cost_clipped: Cost penalty for clipped shipments (proportional to transfer cost)
     """
     total_cost: float
     cost_transfer: float
     cost_cross: float
     cost_lost: float
+    cost_clipped: float
     
     inventory_rdc: np.ndarray  # shape (T+1, N)
     inventory_fdc: np.ndarray  # shape (T+1, N, J)
@@ -48,4 +52,5 @@ class SimulationResult:
     lost_rdc: np.ndarray  # shape (T, N)
     
     clipped_shipments: float
+    clipped_per_period: np.ndarray  # shape (T,)
 
