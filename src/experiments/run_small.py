@@ -74,7 +74,7 @@ def main() -> None:
         },
         # Hard cap of 2 minutes per instance for the exact MIP solver
         mip_max_time=120.0,
-        baseline_names=args.baselines or ['random'],
+        baseline_names=args.baselines or ['myopic', 'random'],
     )
 
 

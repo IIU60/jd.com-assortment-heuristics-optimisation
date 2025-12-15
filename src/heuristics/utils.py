@@ -8,6 +8,124 @@ from ..model.simulator import simulate
 from ..model.result import SimulationResult
 
 
+def compute_available_capacity(
+    instance: Instance,
+    cached_result: SimulationResult,
+    t: int
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """
+    Compute available capacities at period t.
+    
+    Args:
+        instance: Problem instance
+        cached_result: Cached simulation result with current state
+        t: Period index
+    
+    Returns:
+        Tuple of (rdc_inventory_avail, fdc_capacity_slack, outbound_capacity_remaining)
+        - rdc_inventory_avail: shape (N,), available RDC inventory per product
+        - fdc_capacity_slack: shape (J,), available FDC capacity per FDC
+        - outbound_capacity_remaining: scalar, remaining outbound capacity
+    """
+    # RDC inventory available (after replenishment, before shipments)
+    rdc_inventory_avail = cached_result.inventory_rdc[t, :].copy()
+    rdc_inventory_avail += instance.replenishment[t, :]
+    
+    # FDC capacity slack
+    fdc_total_inventory = np.sum(cached_result.inventory_fdc[t, :, :], axis=0)  # shape (J,)
+    if instance.fdc_capacity is not None:
+        fdc_capacity_slack = instance.fdc_capacity - fdc_total_inventory
+        fdc_capacity_slack = np.maximum(0.0, fdc_capacity_slack)  # Non-negative
+    else:
+        fdc_capacity_slack = np.full(instance.num_fdcs, np.inf)
+    
+    # Outbound capacity (full capacity for period t)
+    outbound_capacity_remaining = instance.outbound_capacity[t]
+    
+    return rdc_inventory_avail, fdc_capacity_slack, outbound_capacity_remaining
+
+
+def get_feasible_delta(
+    instance: Instance,
+    u: np.ndarray,
+    cached_result: Optional[SimulationResult],
+    i: int,
+    j: int,
+    t: int,
+    desired_delta: float
+) -> float:
+    """
+    Compute maximum feasible delta for a move at (t, i, j).
+    
+    Checks RDC inventory, FDC capacity, and outbound capacity constraints.
+    
+    Args:
+        instance: Problem instance
+        u: Current shipment plan, shape (T, N, J)
+        cached_result: Optional cached simulation result (if None, uses approximate checks)
+        i: Product index
+        j: FDC index
+        t: Period index
+        desired_delta: Desired change amount (can be positive or negative)
+    
+    Returns:
+        Maximum feasible delta that can be applied without clipping.
+        If desired_delta is negative (reducing), returns desired_delta (can always reduce).
+        If desired_delta is positive (increasing), returns min(desired_delta, available_capacity).
+    """
+    if desired_delta < 0:
+        # Can always reduce (up to current value)
+        return max(desired_delta, -u[t, i, j])
+    
+    # For increases, check available capacity
+    if cached_result is not None:
+        rdc_avail, fdc_slack, outbound_remaining = compute_available_capacity(instance, cached_result, t)
+        
+        # Available RDC inventory for product i
+        avail_rdc = rdc_avail[i]
+        
+        # Available FDC capacity at j
+        avail_fdc = fdc_slack[j]
+        
+        # Available outbound capacity
+        avail_outbound = outbound_remaining
+        
+        # Maximum feasible increase
+        max_delta = min(avail_rdc, avail_fdc, avail_outbound)
+        
+        return min(desired_delta, max_delta)
+    else:
+        # Approximate: use outbound capacity as conservative estimate
+        return min(desired_delta, instance.outbound_capacity[t] * 0.1)  # Conservative
+
+
+def is_move_feasible(
+    instance: Instance,
+    cached_result: SimulationResult,
+    i: int,
+    j: int,
+    t: int,
+    delta: float
+) -> Tuple[bool, float]:
+    """
+    Check if a move is feasible and return maximum feasible delta.
+    
+    Args:
+        instance: Problem instance
+        cached_result: Cached simulation result
+        i: Product index
+        j: FDC index
+        t: Period index
+        delta: Desired delta
+    
+    Returns:
+        Tuple of (is_feasible, max_feasible_delta)
+    """
+    max_feasible = get_feasible_delta(instance, None, cached_result, i, j, t, delta)
+    is_feasible = abs(max_feasible - delta) < 1e-9
+    return is_feasible, max_feasible
+
+
 def copy_u(u: np.ndarray) -> np.ndarray:
     """
     Deep copy of shipment plan.
@@ -152,6 +270,7 @@ def evaluate_u(instance: Instance, u: np.ndarray) -> Tuple[float, Dict[str, Any]
         'cost_transfer': result.cost_transfer,
         'cost_cross': result.cost_cross,
         'cost_lost': result.cost_lost,
+        'cost_clipped': result.cost_clipped,
         'clipped_shipments': result.clipped_shipments
     }
     
@@ -187,6 +306,7 @@ def evaluate_u_incremental(
             'cost_transfer': result.cost_transfer,
             'cost_cross': result.cost_cross,
             'cost_lost': result.cost_lost,
+            'cost_clipped': result.cost_clipped,
             'clipped_shipments': result.clipped_shipments
         }
         return result.total_cost, metrics, result
@@ -202,6 +322,7 @@ def evaluate_u_incremental(
             'cost_transfer': cached_result.cost_transfer,
             'cost_cross': cached_result.cost_cross,
             'cost_lost': cached_result.cost_lost,
+            'cost_clipped': cached_result.cost_clipped,
             'clipped_shipments': cached_result.clipped_shipments
         }
         return cached_result.total_cost, metrics, cached_result
@@ -224,7 +345,32 @@ def evaluate_u_incremental(
     rdc_fulfilled = cached_result.rdc_fulfilled.copy()
     lost_rdc = cached_result.lost_rdc.copy()
     
-    total_clipped = cached_result.clipped_shipments
+    # Subtract old clipping for periods being re-simulated
+    old_clipped_in_periods = np.sum(cached_result.clipped_per_period[first_changed_period:])
+    total_clipped = cached_result.clipped_shipments - old_clipped_in_periods
+    
+    # Compute old cost_clipped contribution for re-simulated periods
+    # This is the cost of clipped shipments in the old solution for these periods
+    old_cost_clipped_contribution = 0.0
+    for t_old in range(first_changed_period, T):
+        # Compare old requests (u_old) with old actual shipments to find clipped amounts
+        old_requests = u_old[t_old, :, :]
+        old_actual = cached_result.shipments[t_old, :, :]
+        clipped_mask = old_requests > old_actual + 1e-9  # Account for floating point
+        if np.any(clipped_mask):
+            clipped_amounts = old_requests - old_actual
+            clipped_amounts[~clipped_mask] = 0.0
+            # Cost is transfer_cost * clipped_amount for each (i,j)
+            old_cost_clipped_contribution += np.sum(instance.transfer_cost * clipped_amounts)
+    
+    # Start with full old cost_clipped, subtract contribution from re-simulated periods
+    cost_clipped = cached_result.cost_clipped - old_cost_clipped_contribution
+    
+    # Track per-period clipping for re-simulated periods (will be reset and recomputed)
+    clipped_per_period = cached_result.clipped_per_period.copy()
+    
+    # Reset clipping for re-simulated periods
+    clipped_per_period[first_changed_period:] = 0.0
     
     # Re-simulate from first_changed_period to T
     for t in range(first_changed_period, T):
@@ -253,7 +399,11 @@ def evaluate_u_incremental(
                 feasible_ship = min(request, avail_rdc, cap_left_fdc, cap_left_outbound)
                 
                 if feasible_ship < request:
-                    total_clipped += (request - feasible_ship)
+                    clipped_amount = request - feasible_ship
+                    total_clipped += clipped_amount
+                    clipped_per_period[t] += clipped_amount  # Accumulate within period
+                    # Cost penalty: proportional to transfer cost of clipped amount
+                    cost_clipped += instance.transfer_cost[i, j] * clipped_amount
                 
                 actual_shipments[t, i, j] = feasible_ship
                 inventory_rdc[t, i] -= feasible_ship
@@ -313,13 +463,16 @@ def evaluate_u_incremental(
         np.sum(lost_fdc) + np.sum(lost_rdc)
     )
     
-    total_cost = new_cost_transfer + new_cost_cross + new_cost_lost
+    # cost_clipped now has the correct value (old cost minus old contribution, plus new contribution)
+    
+    total_cost = new_cost_transfer + new_cost_cross + new_cost_lost + cost_clipped
     
     result = SimulationResult(
         total_cost=total_cost,
         cost_transfer=new_cost_transfer,
         cost_cross=new_cost_cross,
         cost_lost=new_cost_lost,
+        cost_clipped=cost_clipped,
         inventory_rdc=inventory_rdc,
         inventory_fdc=inventory_fdc,
         shipments=actual_shipments,
@@ -328,13 +481,15 @@ def evaluate_u_incremental(
         lost_fdc=lost_fdc,
         rdc_fulfilled=rdc_fulfilled,
         lost_rdc=lost_rdc,
-        clipped_shipments=total_clipped
+        clipped_shipments=total_clipped,
+        clipped_per_period=clipped_per_period
     )
     
     metrics = {
         'cost_transfer': new_cost_transfer,
         'cost_cross': new_cost_cross,
         'cost_lost': new_cost_lost,
+        'cost_clipped': cost_clipped,
         'clipped_shipments': total_clipped
     }
     

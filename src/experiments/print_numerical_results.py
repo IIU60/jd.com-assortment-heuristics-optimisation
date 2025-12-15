@@ -1,7 +1,7 @@
 """
-Utility script to print numerical results for *medium* and *massive*
-experiments in a compact table format, similar to the example in the
-project report.
+Utility script to print numerical results for *small*, *medium*, *large*,
+and *massive* experiments in a compact table format, similar to the
+example in the project report.
 
 It scans the top-level ``experiments/`` directory, finds the most recent
 experiment folder for each size class (by modification time), loads the
@@ -19,7 +19,9 @@ Optional flags allow you to override the automatically selected
 experiment folders:
 
     python -m src.experiments.print_numerical_results \\
+        --small small_5fdc_20sku_T14_20251203-121639 \\
         --medium medium_20fdc_100sku_T14_20251203-121701 \\
+        --large large_80fdc_320sku_T14_20251203-121837 \\
         --massive massive_100fdc_1000sku_T14_20251203-122454
 """
 
@@ -42,6 +44,7 @@ class AlgorithmSummary:
     name: str
     cost: float
     gap_pct: Optional[float]
+    runtime: float
 
 
 def _project_root() -> Path:
@@ -132,6 +135,33 @@ def compute_algorithm_costs(
     return {alg: sums[alg] / counts[alg] for alg in sums if counts.get(alg, 0) > 0}
 
 
+def compute_algorithm_runtimes(
+    rows: Iterable[Dict[str, str]],
+) -> Dict[str, float]:
+    """
+    Compute average runtime per algorithm across all instances.
+
+    Returns a mapping ``algorithm -> mean(runtime)``.
+    """
+    sums: Dict[str, float] = {}
+    counts: Dict[str, int] = {}
+
+    for row in rows:
+        alg = row.get("algorithm")
+        runtime_str = row.get("runtime")
+        if not alg or runtime_str in (None, "", "None"):
+            continue
+        try:
+            runtime_val = float(runtime_str)
+        except (TypeError, ValueError):
+            continue
+
+        sums[alg] = sums.get(alg, 0.0) + runtime_val
+        counts[alg] = counts.get(alg, 0) + 1
+
+    return {alg: sums[alg] / counts[alg] for alg in sums if counts.get(alg, 0) > 0}
+
+
 def build_summary(
     rows: List[Dict[str, str]],
 ) -> Tuple[Optional[float], List[AlgorithmSummary]]:
@@ -146,6 +176,7 @@ def build_summary(
         List of ``AlgorithmSummary`` for all non-MIP algorithms.
     """
     costs_by_alg = compute_algorithm_costs(rows)
+    runtimes_by_alg = compute_algorithm_runtimes(rows)
     mip_cost = costs_by_alg.get("mip")
 
     algo_names = sorted(a for a in costs_by_alg.keys() if a != "mip")
@@ -153,10 +184,11 @@ def build_summary(
     summaries: List[AlgorithmSummary] = []
     for alg in algo_names:
         cost = costs_by_alg[alg]
+        runtime = runtimes_by_alg.get(alg, 0.0)
         gap_pct = None
         if mip_cost is not None and mip_cost > 0.0:
             gap_pct = (cost - mip_cost) / mip_cost * 100.0
-        summaries.append(AlgorithmSummary(name=alg, cost=cost, gap_pct=gap_pct))
+        summaries.append(AlgorithmSummary(name=alg, cost=cost, gap_pct=gap_pct, runtime=runtime))
 
     return mip_cost, summaries
 
@@ -194,8 +226,8 @@ def print_table(
         print(f"Optimal cost (MIP): {mip_cost:,.2f}")
 
     print()
-    print(f"{'Method':10s} {'Cost':>15s} {'Gap (%)':>10s}")
-    print("-" * 40)
+    print(f"{'Method':10s} {'Cost':>15s} {'Gap (%)':>10s} {'Runtime (s)':>12s}")
+    print("-" * 52)
 
     if not summaries:
         print("(no algorithm results)")
@@ -205,15 +237,24 @@ def print_table(
         gap_str = "-"
         if s.gap_pct is not None:
             gap_str = f"{s.gap_pct:6.2f}"
-        print(f"{_pretty_name(s.name):10s} {s.cost:15,.2f} {gap_str:>10s}")
+        print(f"{_pretty_name(s.name):10s} {s.cost:15,.2f} {gap_str:>10s} {s.runtime:12.4f}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Print numerical results for medium and massive experiments "
-            "from experiments/<name>/results/all_results.csv."
+            "Print numerical results for small, medium, large, and massive "
+            "experiments from experiments/<name>/results/all_results.csv."
         )
+    )
+    parser.add_argument(
+        "--small",
+        type=str,
+        default=None,
+        help=(
+            "Name of the small experiment directory under experiments/. "
+            "If omitted, the latest 'small_*' experiment with a summary is used."
+        ),
     )
     parser.add_argument(
         "--medium",
@@ -222,6 +263,15 @@ def main() -> None:
         help=(
             "Name of the medium experiment directory under experiments/. "
             "If omitted, the latest 'medium_*' experiment with a summary is used."
+        ),
+    )
+    parser.add_argument(
+        "--large",
+        type=str,
+        default=None,
+        help=(
+            "Name of the large experiment directory under experiments/. "
+            "If omitted, the latest 'large_*' experiment with a summary is used."
         ),
     )
     parser.add_argument(
@@ -236,7 +286,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    for size_label, override in (("medium", args.medium), ("massive", args.massive)):
+    for size_label, override in (
+        ("small", args.small),
+        ("medium", args.medium),
+        ("large", args.large),
+        ("massive", args.massive),
+    ):
         exp_dir = find_experiment_dir(size_label=size_label, override_name=override)
         if exp_dir is None:
             print(f"\nNo {size_label} experiment with '{SUMMARY_FILENAME}' found.")
@@ -252,6 +307,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 
