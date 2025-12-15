@@ -44,6 +44,7 @@ class AlgorithmSummary:
     name: str
     cost: float
     gap_pct: Optional[float]
+    runtime: float
 
 
 def _project_root() -> Path:
@@ -134,6 +135,33 @@ def compute_algorithm_costs(
     return {alg: sums[alg] / counts[alg] for alg in sums if counts.get(alg, 0) > 0}
 
 
+def compute_algorithm_runtimes(
+    rows: Iterable[Dict[str, str]],
+) -> Dict[str, float]:
+    """
+    Compute average runtime per algorithm across all instances.
+
+    Returns a mapping ``algorithm -> mean(runtime)``.
+    """
+    sums: Dict[str, float] = {}
+    counts: Dict[str, int] = {}
+
+    for row in rows:
+        alg = row.get("algorithm")
+        runtime_str = row.get("runtime")
+        if not alg or runtime_str in (None, "", "None"):
+            continue
+        try:
+            runtime_val = float(runtime_str)
+        except (TypeError, ValueError):
+            continue
+
+        sums[alg] = sums.get(alg, 0.0) + runtime_val
+        counts[alg] = counts.get(alg, 0) + 1
+
+    return {alg: sums[alg] / counts[alg] for alg in sums if counts.get(alg, 0) > 0}
+
+
 def build_summary(
     rows: List[Dict[str, str]],
 ) -> Tuple[Optional[float], List[AlgorithmSummary]]:
@@ -148,6 +176,7 @@ def build_summary(
         List of ``AlgorithmSummary`` for all non-MIP algorithms.
     """
     costs_by_alg = compute_algorithm_costs(rows)
+    runtimes_by_alg = compute_algorithm_runtimes(rows)
     mip_cost = costs_by_alg.get("mip")
 
     algo_names = sorted(a for a in costs_by_alg.keys() if a != "mip")
@@ -155,10 +184,11 @@ def build_summary(
     summaries: List[AlgorithmSummary] = []
     for alg in algo_names:
         cost = costs_by_alg[alg]
+        runtime = runtimes_by_alg.get(alg, 0.0)
         gap_pct = None
         if mip_cost is not None and mip_cost > 0.0:
             gap_pct = (cost - mip_cost) / mip_cost * 100.0
-        summaries.append(AlgorithmSummary(name=alg, cost=cost, gap_pct=gap_pct))
+        summaries.append(AlgorithmSummary(name=alg, cost=cost, gap_pct=gap_pct, runtime=runtime))
 
     return mip_cost, summaries
 
@@ -196,8 +226,8 @@ def print_table(
         print(f"Optimal cost (MIP): {mip_cost:,.2f}")
 
     print()
-    print(f"{'Method':10s} {'Cost':>15s} {'Gap (%)':>10s}")
-    print("-" * 40)
+    print(f"{'Method':10s} {'Cost':>15s} {'Gap (%)':>10s} {'Runtime (s)':>12s}")
+    print("-" * 52)
 
     if not summaries:
         print("(no algorithm results)")
@@ -207,7 +237,7 @@ def print_table(
         gap_str = "-"
         if s.gap_pct is not None:
             gap_str = f"{s.gap_pct:6.2f}"
-        print(f"{_pretty_name(s.name):10s} {s.cost:15,.2f} {gap_str:>10s}")
+        print(f"{_pretty_name(s.name):10s} {s.cost:15,.2f} {gap_str:>10s} {s.runtime:12.4f}")
 
 
 def main() -> None:
